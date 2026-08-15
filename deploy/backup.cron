@@ -1,0 +1,1 @@
+17 3 * * * root /opt/puedoayudar.co/scripts/backup.sh >> /var/log/puedoayudar-backup.log 2>&1

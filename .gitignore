@@ -1,0 +1,19 @@
+.env
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.db
+
+# Respaldos de base de datos (nunca al repo)
+backups/
+*.sql
+*.sql.gz
+
+# Dependencias y artefactos de build
+node_modules/
+tsconfig.tsbuildinfo
+
+# Basura de macOS
+._*
+.DS_Store
