@@ -957,6 +957,7 @@ export default function RedApoyoApp() {
               navigate("logistica");
             }}
             onNeeds={() => navigate("donante")}
+            onEmergency={() => navigate("personas")}
           />
         )}
 
@@ -1141,6 +1142,7 @@ function HomeScreen(props: {
   onInitiatives: () => void;
   onMap: () => void;
   onNeeds: () => void;
+  onEmergency: () => void;
 }) {
   const { pulse } = props;
   const saved = ROLES.find((item) => item.id === props.role);
@@ -1318,9 +1320,19 @@ function HomeScreen(props: {
         </article>
       </section>
 
-      <p className="fineprint">
-        Si hay vidas en riesgo, llama al <a href="tel:123">123</a> antes de publicar aquí.
-      </p>
+      {/*
+        La emergencia va abajo y en rojo: no compite con los roles, pero deja de ser
+        letra pequeña. Lleva a la pantalla que explica por qué eso no se publica aquí.
+      */}
+      <div className="home-foot">
+        <button type="button" className="emergency-row" onClick={props.onEmergency}>
+          <strong>¿Hay una persona herida? Línea 123</strong>
+          <UiIcon name="arrow-right" size={17} />
+        </button>
+        <p className="fineprint center">
+          Esta app no recauda dinero. Solo conecta necesidades con quien puede cubrirlas.
+        </p>
+      </div>
     </section>
   );
 }
