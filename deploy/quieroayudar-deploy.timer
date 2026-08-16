@@ -1,0 +1,11 @@
+[Unit]
+Description=Consulta main cada minuto y despliega si hay cambios
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=15s
+Unit=quieroayudar-deploy.service
+
+[Install]
+WantedBy=timers.target
