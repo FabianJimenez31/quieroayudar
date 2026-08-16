@@ -24,11 +24,10 @@ test("opens on the role picker, not on a marketing page", async () => {
   const html = await response.text();
 
   assert.match(html, /Red de Apoyo Colombia/i);
-  assert.match(html, /ayudando hoy/i);
-  assert.match(html, /Estoy en una zona afectada/i);
-  assert.match(html, /Atiendo un centro de acopio/i);
-  assert.match(html, /Puedo ofrecer manos/i);
+  assert.match(html, /qué quieres/i);
   assert.match(html, /Quiero donar/i);
+  assert.match(html, /Ser voluntario/i);
+  assert.match(html, /Pedir ayuda/i);
 
   assert.match(html, /Línea 123/);
   assert.match(html, /Saltar al contenido/i);
@@ -125,8 +124,8 @@ test("home shows the state of the network, not just four buttons", async () => {
   assert.match(html, /Cuánto se entregó/);
   assert.match(html, /Quién trabaja/);
   assert.match(html, /Dónde faltan manos/);
-  // Los roles siguen presentes: el tablero acompaña, no reemplaza.
-  assert.match(html, /Estoy en una zona afectada/);
+  // Las puertas de entrada siguen presentes: el tablero acompaña, no reemplaza.
+  assert.match(html, /Pedir ayuda/);
 });
 
 test("an empty dashboard says so instead of showing zeros as if they were data", async () => {
@@ -139,7 +138,7 @@ test("an empty dashboard says so instead of showing zeros as if they were data",
 test("the tutorial is reachable and covers every role", async () => {
   const code = await source();
   assert.match(code, /"como-funciona"/);
-  assert.match(code, /Mira cómo funciona en un minuto/);
+  assert.match(code, /Ver los pasos/);
   for (const role of ["afectado", "acopio", "logistica", "donante"]) {
     assert.match(code, new RegExp(`role: "${role}",\\n\\s+title:`));
   }

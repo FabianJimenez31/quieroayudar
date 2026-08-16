@@ -38,6 +38,9 @@ class Center(Base):
     # del barrio o de la calle. La app enruta por texto cuando es aproximado, para no
     # mandar a nadie a una conjetura nuestra.
     location_precision: Mapped[str] = mapped_column(String(12), nullable=False, default="exact")
+    # Distingue a qué emergencia sirve el centro (p. ej. "terremoto" vs "tolima"),
+    # para que el home pueda filtrar por causa. "terremoto" es el valor por defecto.
+    cause: Mapped[str] = mapped_column(String(20), nullable=False, default="terremoto")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
 
@@ -47,6 +50,7 @@ class Center(Base):
     __table_args__ = (
         Index("idx_centers_city_status", "city", "status"),
         Index("idx_centers_updated_at", "updated_at"),
+        Index("idx_centers_cause_status", "cause", "status"),
     )
 
 

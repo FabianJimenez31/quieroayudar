@@ -4,6 +4,9 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# Emergencias activas que un centro puede servir. "terremoto" es la causa por defecto.
+Cause = Literal["terremoto", "tolima"]
+
 
 class ActionPayload(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -32,6 +35,7 @@ class CenterCreate(BaseModel):
     sourceUrl: str = Field(default="", max_length=500)
     # "approximate" cuando solo se tiene la dirección y el pin es del barrio o la calle.
     locationPrecision: Literal["exact", "approximate"] = "exact"
+    cause: Cause = "terremoto"
 
     @field_validator("name", "city", "address", "contact", "hours", "sourceName", "sourceUrl")
     @classmethod
@@ -45,6 +49,7 @@ class CenterUpdate(BaseModel):
     id: str = Field(min_length=1, max_length=80)
     status: Optional[Literal["active", "saturated", "closed"]] = None
     volunteersSaturated: Optional[bool] = None
+    cause: Optional[Cause] = None
 
 
 class ProductLine(BaseModel):

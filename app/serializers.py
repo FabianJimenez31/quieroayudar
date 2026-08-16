@@ -24,6 +24,7 @@ def center_json(row: Center) -> dict:
         "status": row.status,
         "volunteersSaturated": bool(row.volunteers_saturated),
         "locationPrecision": row.location_precision or "exact",
+        "cause": row.cause,
         "createdAt": iso(row.created_at),
         "updatedAt": iso(row.updated_at),
     }

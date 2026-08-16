@@ -1,13 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import UiIcon, { type IconName } from "./UiIcon";
-import { CATALOG, CATALOG_ITEMS } from "./catalog";
+import { CATALOG, CATALOG_ITEMS, type CatalogItem } from "./catalog";
 import CentersMap from "./CentersMap";
 import HoaxesScreen from "./HoaxesScreen";
 import InitiativesScreen from "./InitiativesScreen";
-import { distanceKm, formatDistance, isApproximate, routeUrl } from "./geo";
+import { distanceKm, formatDistance, routeUrl } from "./geo";
+import { parseCoordinates } from "./coordinar/centersImport";
+import { drawNeedsShareImage } from "./coordinar/shareImage";
 import type {
+  Cause,
   Center,
   FieldReport,
   Level,
@@ -23,9 +26,11 @@ type Role = "afectado" | "acopio" | "logistica" | "donante";
 
 type Screen =
   | "roles"
+  | "ayuda-rol"
   | "tutorial"
   | "afectado"
   | "acopio"
+  | "centro-nuevo"
   | "productos"
   | "recibido"
   | "manos"
@@ -53,25 +58,30 @@ type Commitment = {
 
 type RouteHint = { name: string; address: string; url: string };
 
+/** Borrador del alta de centro público: mismos campos que acepta POST /v1/centers. */
+type NewCenterDraft = {
+  name: string;
+  city: string;
+  address: string;
+  contact: string;
+  hours: string;
+  latitude: string;
+  longitude: string;
+  cause: Cause;
+};
+
+const BLANK_NEW_CENTER: NewCenterDraft = {
+  name: "",
+  city: "",
+  address: "",
+  contact: "",
+  hours: "",
+  latitude: "",
+  longitude: "",
+  cause: "terremoto",
+};
+
 const EMPTY: Network = { centers: [], needs: [], volunteerRequests: [], reports: [] };
-
-/** Sigla de dos letras para la ficha de cada tarea, como en el diseño. */
-function initials(label: string): string {
-  const words = label.split(/\s+/).filter((word) => word.length > 2);
-  const first = words[0]?.[0] ?? label[0] ?? "";
-  const second = words[1]?.[0] ?? words[0]?.[1] ?? "";
-  return (first + second).toUpperCase();
-}
-
-/** "hace 12 min" — el diseño fecha cada reporte para saber si sigue vigente. */
-function since(value: string): string {
-  const minutes = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 60000));
-  if (minutes < 1) return "ahora";
-  if (minutes < 60) return `hace ${minutes} min`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `hace ${hours} h`;
-  return `hace ${Math.round(hours / 24)} d`;
-}
 
 /**
  * Cada pantalla tiene su propia entrada de historial. Sin esto, el botón atrás de Android
@@ -80,9 +90,11 @@ function since(value: string): string {
  */
 const SCREEN_QUERY: Record<Screen, string> = {
   roles: "",
+  "ayuda-rol": "pedir-ayuda",
   tutorial: "como-funciona",
   afectado: "afectado",
   acopio: "acopio",
+  "centro-nuevo": "nuevo-centro",
   productos: "productos",
   recibido: "recibido",
   manos: "manos",
@@ -103,6 +115,16 @@ const SCREEN_BY_QUERY = new Map(
 );
 
 const ROLE_SCREENS: Role[] = ["afectado", "acopio", "logistica", "donante"];
+
+/** Las dos emergencias activas hoy. "terremoto" es la causa por defecto. */
+const CAUSES: { id: Cause; label: string; short: string }[] = [
+  { id: "terremoto", label: "Terremoto", short: "Terremoto" },
+  { id: "tolima", label: "Incendios en el Tolima", short: "Tolima" },
+];
+
+function causeOf(center: Center): Cause {
+  return center.cause ?? "terremoto";
+}
 
 function urlForScreen(next: Screen) {
   const query = SCREEN_QUERY[next];
@@ -125,11 +147,11 @@ const SATURATION_OPTIONS = [
   { id: "Riesgo en el lugar", detail: "Hay riesgo estructural, incendio u otra amenaza" },
 ];
 
-const ROLES: { id: Role; code: string; title: string; text: string }[] = [
-  { id: "afectado", code: "PA", title: "Estoy en una zona afectada", text: "Reporto productos, manos o saturación" },
-  { id: "acopio", code: "AC", title: "Atiendo un centro de acopio", text: "Publico qué necesitamos y cuánto" },
-  { id: "logistica", code: "LG", title: "Puedo ofrecer manos", text: "Voy donde falta apoyo logístico" },
-  { id: "donante", code: "DN", title: "Quiero donar", text: "Veo qué se necesita ahora mismo" },
+const ROLES: { id: Role; code: string; title: string; text: string; resumeLabel: string }[] = [
+  { id: "acopio", code: "AC", title: "Centro de acopio", text: "Lidero un centro de acopio", resumeLabel: "centro de acopio" },
+  { id: "afectado", code: "PA", title: "Zona afectada", text: "Estoy en el sitio del desastre", resumeLabel: "zona afectada" },
+  { id: "logistica", code: "LG", title: "Ser voluntario", text: "Poner el cuerpo en un centro o en la calle", resumeLabel: "voluntario" },
+  { id: "donante", code: "DN", title: "Quiero donar", text: "Productos que hacen falta ahora mismo", resumeLabel: "donante" },
 ];
 
 /* ────────────────────────── Utilidades ────────────────────────── */
@@ -288,8 +310,6 @@ function buildPulse(network: Network, position: Position | null) {
     delivered,
     promised,
     goal,
-    urgent: missing.filter((row) => row.need.status === "urgent").length,
-    handsWanted: wanted.reduce((sum, row) => sum + row.missing, 0),
     missing: missing.slice(0, 3),
     working: working.slice(0, 3),
     wanted: wanted.slice(0, 3),
@@ -304,6 +324,10 @@ export default function RedApoyoApp() {
   const [screen, setScreen] = useState<Screen>("roles");
   const [role, setRole] = useState<Role | null>(null);
   const [myCenterId, setMyCenterId] = useState("");
+  // Qué emergencia se está mirando: filtra los centros que se muestran en toda la app.
+  // "terremoto" es la causa por defecto.
+  const [cause, setCause] = useState<Cause>("terremoto");
+  const [newCenter, setNewCenter] = useState<NewCenterDraft>(BLANK_NEW_CENTER);
   const [network, setNetwork] = useState<Network>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -311,6 +335,8 @@ export default function RedApoyoApp() {
   const [busy, setBusy] = useState(false);
   const [position, setPosition] = useState<Position | null>(null);
   const [locating, setLocating] = useState(false);
+  // Solo el flujo de donante acota por radio; null = sin filtro de radio.
+  const [donorRadiusKm, setDonorRadiusKm] = useState<number | null>(null);
   // Vive aquí y no en la pantalla de puntos para que el acceso directo del inicio
   // pueda abrirla directamente en mapa, sin obligar a tocar el interruptor.
   const [pointsView, setPointsView] = useState<"lista" | "mapa">("lista");
@@ -319,6 +345,8 @@ export default function RedApoyoApp() {
   const [reference, setReference] = useState("");
   const [levels, setLevels] = useState<Record<string, Level>>({});
   const [targets, setTargets] = useState<Record<string, number>>({});
+  // Productos fuera del catálogo fijo, agregados a mano desde "Otro producto".
+  const [customItems, setCustomItems] = useState<CatalogItem[]>([]);
   // Con qué rol y sitio se llenó la lista, para no rehacerla al volver atrás.
   const [productsContext, setProductsContext] = useState("");
   const [received, setReceived] = useState<Record<string, number>>({});
@@ -332,6 +360,7 @@ export default function RedApoyoApp() {
   const [doneNote, setDoneNote] = useState("");
   const [doneRoute, setDoneRoute] = useState<RouteHint | null>(null);
   const [pledge, setPledge] = useState<Commitment | null>(null);
+  const [sharing, setSharing] = useState(false);
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -386,6 +415,8 @@ export default function RedApoyoApp() {
     const savedCity = window.localStorage.getItem("ra.city") ?? "";
     if (savedCity) setCity(savedCity);
     if (savedCenter) setMyCenterId(savedCenter);
+    const savedCause = window.localStorage.getItem("ra.cause");
+    if (savedCause && CAUSES.some((item) => item.id === savedCause)) setCause(savedCause as Cause);
 
     const savedPledge = window.localStorage.getItem("ra.pledge");
     if (savedPledge) {
@@ -459,6 +490,7 @@ export default function RedApoyoApp() {
     // Lo que se llenó bajo el rol anterior no puede sobrevivir al cambio.
     setLevels({});
     setTargets({});
+    setCustomItems([]);
     setProductsContext("");
     setPledgeNeedId("");
     navigate("roles");
@@ -476,12 +508,62 @@ export default function RedApoyoApp() {
     window.localStorage.removeItem("ra.center");
     setLevels({});
     setTargets({});
+    setCustomItems([]);
     setProductsContext("");
+  }
+
+  function openNewCenter() {
+    // Parte de la causa que se está mirando en el inicio; se puede cambiar en el formulario.
+    setNewCenter({ ...BLANK_NEW_CENTER, cause });
+    navigate("centro-nuevo");
+  }
+
+  /** Alta pública de centro: el back la acepta sin código de coordinador. */
+  async function submitNewCenter() {
+    const name = newCenter.name.trim();
+    const cityValue = newCenter.city.trim();
+    const address = newCenter.address.trim();
+    const latitude = Number(newCenter.latitude);
+    const longitude = Number(newCenter.longitude);
+    if (!name || !cityValue || !address) {
+      flash("Completa nombre, ciudad y dirección.");
+      return;
+    }
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      flash("Falta la ubicación del centro.");
+      return;
+    }
+
+    const result = await send("/api/centers", "POST", {
+      name,
+      city: cityValue,
+      address,
+      contact: newCenter.contact.trim(),
+      hours: newCenter.hours.trim(),
+      latitude,
+      longitude,
+      cause: newCenter.cause,
+    });
+    if (!result.ok) return;
+    const created = result.data.center as Center | undefined;
+    if (!created) return;
+    setNetwork((current) => ({ ...current, centers: [created, ...current.centers] }));
+    // Si se creó para la otra causa, cámbiate a esa vista para que el centro nuevo se vea de inmediato.
+    if (newCenter.cause !== cause) updateCause(newCenter.cause);
+    chooseCenter(created.id);
+    setNewCenter(BLANK_NEW_CENTER);
+    flash("Centro publicado. Ya aparece en el mapa.");
+    navigate("acopio");
   }
 
   function updateCity(value: string) {
     setCity(value);
     window.localStorage.setItem("ra.city", value);
+  }
+
+  function updateCause(value: Cause) {
+    setCause(value);
+    window.localStorage.setItem("ra.cause", value);
   }
 
   const myCenter = useMemo(
@@ -496,7 +578,31 @@ export default function RedApoyoApp() {
     [network.needs, myCenter],
   );
 
-  const pulse = useMemo(() => buildPulse(network, position), [network, position]);
+  // Todo lo que se explora (mapa, listas, metas) se acota a la causa elegida en el
+  // inicio. El centro propio (myCenter/myNeeds, arriba) no se filtra: quien ya
+  // coordina un punto no puede perderlo de vista por cambiar de pestaña de causa.
+  const visibleCenters = useMemo(
+    () => network.centers.filter((center) => causeOf(center) === cause),
+    [network.centers, cause],
+  );
+  const visibleCenterIds = useMemo(() => new Set(visibleCenters.map((center) => center.id)), [visibleCenters]);
+  const visibleNeeds = useMemo(
+    () => network.needs.filter((need) => visibleCenterIds.has(need.centerId)),
+    [network.needs, visibleCenterIds],
+  );
+  const visibleVolunteerRequests = useMemo(
+    () => network.volunteerRequests.filter((request) => visibleCenterIds.has(request.centerId)),
+    [network.volunteerRequests, visibleCenterIds],
+  );
+
+  const pulse = useMemo(
+    () =>
+      buildPulse(
+        { centers: visibleCenters, needs: visibleNeeds, volunteerRequests: visibleVolunteerRequests, reports: network.reports },
+        position,
+      ),
+    [visibleCenters, visibleNeeds, visibleVolunteerRequests, network.reports, position],
+  );
 
   /**
    * Abre la lista de productos partiendo de lo ya publicado. Solo se reconstruye si
@@ -523,8 +629,21 @@ export default function RedApoyoApp() {
         nextLevels[item.name] = published ? published.status : "normal";
         nextTargets[item.name] = published ? published.target : item.start;
       }
+      // Necesidades ya publicadas que no vienen del catálogo fijo: se agregaron a mano
+      // en una sesión anterior con "Otro producto" y deben poder seguir editándose.
+      const catalogNames = new Set(CATALOG_ITEMS.map((item) => item.name.toLowerCase()));
+      const nextCustom: CatalogItem[] = [];
+      if (centerId) {
+        for (const need of network.needs) {
+          if (need.centerId !== centerId || catalogNames.has(need.name.toLowerCase())) continue;
+          nextCustom.push({ name: need.name, unit: need.unit, step: 1, start: need.target });
+          nextLevels[need.name] = need.status;
+          nextTargets[need.name] = need.target;
+        }
+      }
       setLevels(nextLevels);
       setTargets(nextTargets);
+      setCustomItems(nextCustom);
       setProductsContext(context);
     }
     navigate("productos");
@@ -540,7 +659,12 @@ export default function RedApoyoApp() {
       (result) => {
         setPosition({ latitude: result.coords.latitude, longitude: result.coords.longitude });
         setLocating(false);
-        flash("Ubicación activada. Ordenamos por cercanía.");
+        if (screen === "donante") {
+          setDonorRadiusKm(5);
+          flash("Ubicación activada. Radio de 5 km.");
+        } else {
+          flash("Ubicación activada. Ordenamos por cercanía.");
+        }
       },
       () => {
         setLocating(false);
@@ -587,8 +711,23 @@ export default function RedApoyoApp() {
 
   /* ───────── Acciones ───────── */
 
-  const urgentCount = CATALOG_ITEMS.filter((item) => levels[item.name] === "urgent").length;
-  const blockedCount = CATALOG_ITEMS.filter((item) => levels[item.name] === "blocked").length;
+  const allProductItems = useMemo(() => [...CATALOG_ITEMS, ...customItems], [customItems]);
+  const urgentCount = allProductItems.filter((item) => levels[item.name] === "urgent").length;
+  const blockedCount = allProductItems.filter((item) => levels[item.name] === "blocked").length;
+
+  /** Producto fuera del catálogo, agregado a mano desde "Otro producto". */
+  function addCustomProduct(name: string, unit: string) {
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+    const key = trimmedName.toLowerCase();
+    if (allProductItems.some((item) => item.name.toLowerCase() === key)) {
+      flash(`"${trimmedName}" ya está en la lista.`);
+      return;
+    }
+    setCustomItems((current) => [...current, { name: trimmedName, unit: unit.trim() || "unidades", step: 1, start: 1 }]);
+    setLevels((current) => ({ ...current, [trimmedName]: "urgent" }));
+    setTargets((current) => ({ ...current, [trimmedName]: 1 }));
+  }
 
   function fieldPlace() {
     return reference.trim() || gpsLabel || city.trim();
@@ -627,16 +766,20 @@ export default function RedApoyoApp() {
   }
 
   async function submitProducts() {
+    const customNames = new Set(customItems.map((item) => item.name.toLowerCase()));
     if (role === "acopio") {
       if (!myCenter) { flash("Elige primero tu centro de acopio."); return; }
       const published = new Set(
         network.needs.filter((need) => need.centerId === myCenter.id).map((need) => need.name.toLowerCase()),
       );
       // Solo se publica lo marcado. "Se necesita" viaja únicamente si ya existía,
-      // para poder bajarlo de urgente sin inundar la lista de los donantes.
-      const products = CATALOG_ITEMS.filter((item) => {
+      // para poder bajarlo de urgente sin inundar la lista de los donantes. Los
+      // productos agregados a mano ("Otro producto") sí viajan aunque queden en
+      // "Se necesita": agregarlos ya fue una acción explícita.
+      const products = allProductItems.filter((item) => {
         const level = levels[item.name];
         if (!level) return false;
+        if (customNames.has(item.name.toLowerCase())) return true;
         return level !== "normal" || published.has(item.name.toLowerCase());
       }).map((item) => ({
         name: item.name,
@@ -660,7 +803,11 @@ export default function RedApoyoApp() {
     }
 
     if (missingCity()) return;
-    const touched = CATALOG_ITEMS.filter((item) => levels[item.name] && levels[item.name] !== "normal");
+    const touched = allProductItems.filter((item) => {
+      const level = levels[item.name];
+      if (!level) return false;
+      return customNames.has(item.name.toLowerCase()) || level !== "normal";
+    });
     if (!touched.length) { flash("Marca al menos un producto como urgente o suficiente."); return; }
     const labels: Record<Level, string> = { urgent: "URGENTE", normal: "SE NECESITA", blocked: "YA HAY" };
     const details = `Estado de productos: ${touched
@@ -719,26 +866,68 @@ export default function RedApoyoApp() {
     return result.ok;
   }
 
+  /**
+   * Se publica solo al reabrir: la red no tiene push, así que este reporte en el
+   * feed es lo único que avisa a donantes y voluntarios que vuelven a hacer falta.
+   */
+  async function notifyReopened(category: "saturation" | "hands", detail: string) {
+    if (!myCenter) return;
+    await send("/api/network", "POST", {
+      action: "report",
+      category,
+      city: myCenter.city,
+      location: myCenter.name,
+      details: detail,
+    });
+    void sync();
+  }
+
+  async function setDonationsAccepting(accepting: boolean) {
+    if (!myCenter) return;
+    const name = myCenter.name;
+    if (!(await setCenterSaturated(!accepting))) return;
+    if (accepting) {
+      flash("Avisamos a la red que vuelves a recibir donaciones.");
+      void notifyReopened("saturation", `${name} vuelve a aceptar donaciones.`);
+    } else {
+      flash("Dejas de aparecer como destino sugerido.");
+    }
+  }
+
+  /** Cambia a qué emergencia sirve el propio centro. Puede ir en los dos sentidos. */
+  async function setCenterCause(next: Cause) {
+    if (!myCenter || myCenter.cause === next) return;
+    const previous = causeOf(myCenter);
+    patchMyCenter({ cause: next });
+    const result = await send("/api/centers", "PATCH", { id: myCenter.id, cause: next });
+    if (result.ok) {
+      // Se sigue viendo el propio centro sin importar qué causa se esté explorando en el inicio.
+      updateCause(next);
+      void sync();
+      flash(`Este centro ahora aparece en ${CAUSES.find((item) => item.id === next)?.short ?? next}.`);
+    } else {
+      patchMyCenter({ cause: previous });
+    }
+  }
+
+  async function setVolunteersAccepting(accepting: boolean) {
+    if (!myCenter) return;
+    const name = myCenter.name;
+    const saturated = !accepting;
+    patchMyCenter({ volunteersSaturated: saturated });
+    const result = await send("/api/centers", "PATCH", { id: myCenter.id, volunteersSaturated: saturated });
+    void sync();
+    if (!result.ok) { patchMyCenter({ volunteersSaturated: !saturated }); return; }
+    if (accepting) {
+      flash("Avisamos a la red que vuelves a aceptar voluntarios.");
+      void notifyReopened("hands", `${name} vuelve a aceptar voluntarios.`);
+    } else {
+      flash("Los voluntarios nuevos verán otros centros primero.");
+    }
+  }
+
   async function submitSaturation() {
     const option = SATURATION_OPTIONS.find((item) => item.id === saturationReason) ?? SATURATION_OPTIONS[0];
-    if (role === "acopio") {
-      if (!myCenter) { flash("Elige primero tu centro de acopio."); return; }
-      if (!(await setCenterSaturated(true))) return;
-      // El motivo también se publica: sin esto, logística ve un centro cerrado sin saber por qué.
-      await send("/api/network", "POST", {
-        action: "report",
-        category: "saturation",
-        city: myCenter.city,
-        location: myCenter.name,
-        details: `Punto saturado: ${option.id}. ${option.detail}.`,
-      });
-      finish(
-        "saturado",
-        `${myCenter.name} dejó de aparecer como destino sugerido. Motivo: ${option.id.toLowerCase()}.`,
-        "Quítalo desde el interruptor del inicio cuando baje la afluencia.",
-      );
-      return;
-    }
     if (missingCity()) return;
     const result = await send("/api/network", "POST", {
       action: "report",
@@ -812,16 +1001,68 @@ export default function RedApoyoApp() {
     }));
   }
 
-  async function toggleVolunteers() {
+  /**
+   * Genera la tarjeta de necesidades del centro y abre el share-sheet nativo
+   * (Instagram aparece ahí si está instalada). Sin share-sheet, descarga el
+   * PNG para subirlo a mano.
+   */
+  async function shareCenterNeeds() {
     if (!myCenter) return;
-    const next = !myCenter.volunteersSaturated;
-    patchMyCenter({ volunteersSaturated: next });
-    flash(next ? "Los voluntarios nuevos verán otros centros." : "Vuelves a aparecer para voluntarios.");
-    const result = await send("/api/centers", "PATCH", { id: myCenter.id, volunteersSaturated: next });
-    // Éxito o error, la red manda: al sincronizar se confirma o se deshace.
-    void sync();
-    if (!result.ok) patchMyCenter({ volunteersSaturated: !next });
+    const items = myNeeds
+      .filter((need) => need.status !== "blocked")
+      .map((need) => ({
+        name: need.name,
+        unit: need.unit,
+        remaining: Math.max(0, need.target - need.covered - need.committed),
+        urgent: need.status === "urgent",
+      }))
+      .filter((need) => need.remaining > 0)
+      .sort((a, b) => Number(b.urgent) - Number(a.urgent));
+
+    if (items.length === 0) {
+      flash("Todavía no tienes productos pendientes por compartir.");
+      return;
+    }
+
+    setSharing(true);
+    try {
+      await document.fonts.ready;
+      const canvas = document.createElement("canvas");
+      drawNeedsShareImage(canvas, myCenter, items);
+
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!blob) throw new Error("No pudimos generar la imagen.");
+
+      const file = new File([blob], `necesidades-${norm(myCenter.name).replace(/\s+/g, "-")}.png`, { type: "image/png" });
+      const shareData: ShareData = {
+        files: [file],
+        title: "Necesitamos tu ayuda",
+        text: `${myCenter.name} está pidiendo apoyo. Dona o entrega en quieroayudar.co`,
+      };
+
+      if (navigator.canShare?.(shareData)) {
+        try {
+          await navigator.share(shareData);
+          return;
+        } catch (caught) {
+          if (caught instanceof Error && caught.name === "AbortError") return;
+        }
+      }
+
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = file.name;
+      link.click();
+      URL.revokeObjectURL(url);
+      flash("Imagen descargada. Súbela a Instagram desde tu galería.");
+    } catch (caught) {
+      flash(caught instanceof Error ? caught.message : "No pudimos generar la imagen.");
+    } finally {
+      setSharing(false);
+    }
   }
+
   /* ───────── Navegación ───────── */
 
   const home: Screen = role ?? "roles";
@@ -832,30 +1073,27 @@ export default function RedApoyoApp() {
     window.history.back();
   }
 
-  // El subtítulo de la pantalla de compromiso nombra el producto, así que la
-  // necesidad hay que resolverla antes de armar las cabeceras.
-  const pledgeNeedName = network.needs.find((need) => need.id === pledgeNeedId)?.name ?? "";
-
   const HEADERS: Partial<Record<Screen, [string, string]>> = {
-    afectado: ["Zona afectada", "Tus reportes se publican al instante"],
+    "ayuda-rol": ["Punto de acopio o zona afectada", "Puedes cambiarlo después"],
+    afectado: ["Zona afectada", city || "Indica dónde estás"],
     acopio: [
       myCenter?.name ?? "Centro de acopio",
       myCenter ? `${myCenter.address} · ${myCenter.city}` : "Elige tu centro",
     ],
+    "centro-nuevo": ["Registrar centro de acopio", "Aparece de inmediato en el mapa"],
     tutorial: ["Cómo funciona", "Cuatro caminos, ninguno pide registro"],
     productos: ["Productos", role === "acopio" ? "Marca estado y meta" : "Marca el estado de cada uno"],
-    done: ["Listo", "Guarda la referencia"],
     recibido: ["Registrar lo que llegó", myCenter?.name ?? "Elige tu centro"],
-    manos: ["Pedir manos", "Una tarea por solicitud"],
-    saturado: ["Reportar saturación", role === "acopio" ? myCenter?.name ?? "Elige tu centro" : city || "Zona afectada"],
-    personas: ["Persona herida", "Atención de emergencias"],
+    manos: ["Solicitar manos", "Se avisa a voluntarios cercanos"],
+    saturado: ["Marcar saturación", city || "Zona afectada"],
+    personas: ["Persona encontrada", "Atención de emergencias"],
     logistica: [
-      "Dónde faltan manos",
-      "Ordenado por necesidad, no por cercanía",
+      "¿Dónde hago falta?",
+      `${visibleCenters.filter((item) => item.status === "active").length} centros activos`,
     ],
-    donante: ["Se necesita ahora", "Urgencia primero, luego cercanía"],
-    donar: ["Comprometer donación", pledgeNeedName || "Reserva por 6 horas"],
-    iniciativas: ["Empresas que donan", "Cada botón lleva al canal oficial"],
+    donante: ["Se necesita ahora", "Priorizado por los centros"],
+    donar: ["Comprometer donación", "Reserva por 6 horas"],
+    iniciativas: ["Iniciativas corporativas", "Empresas con canal abierto para donar"],
     bulos: ["Noticias falsas", "Verificadas y desmentidas"],
   };
   const header = HEADERS[screen];
@@ -866,9 +1104,11 @@ export default function RedApoyoApp() {
     productos: role === "acopio" ? "Publicar lista" : "Publicar reporte",
     recibido: myNeeds.length > 0 ? "Registrar entrega" : undefined,
     manos: "Enviar solicitud",
-    saturado: role === "acopio" ? "Marcar mi centro como saturado" : "Publicar alerta",
+    "centro-nuevo": "Publicar centro",
+    saturado: "Publicar alerta",
     // Sin necesidad no hay nada que comprometer: un botón inerte es peor que ninguno.
     donar: pledgeNeed ? "Comprometer donación" : undefined,
+    done: "Volver al inicio",
   };
   const cta = CTA_LABELS[screen];
 
@@ -876,6 +1116,7 @@ export default function RedApoyoApp() {
     if (screen === "productos") void submitProducts();
     else if (screen === "recibido") void submitReceived();
     else if (screen === "manos") void submitHands();
+    else if (screen === "centro-nuevo") void submitNewCenter();
     else if (screen === "saturado") void submitSaturation();
     else if (screen === "donar") void submitPledge();
     else if (screen === "done") navigate(home);
@@ -887,54 +1128,58 @@ export default function RedApoyoApp() {
           { label: "Urgente", icon: "alert", target: "donante" },
           { label: "Acopios", icon: "building", target: "logistica" },
           { label: "Empresas", icon: "reports", target: "iniciativas" },
-          { label: "Yo", icon: "users", target: "roles" },
+          { label: "Inicio", icon: "home", target: "roles" },
         ]
       : role === "logistica"
         ? [
             { label: "Puntos", icon: "location", target: "logistica" },
-            { label: "Urgente", icon: "alert", target: "donante" },
-            { label: "Yo", icon: "users", target: "roles" },
+            // { label: "Urgente", icon: "alert", target: "donante" },
+            { label: "Inicio", icon: "home", target: "roles" },
           ]
         : [
-            { label: "Inicio", icon: "home", target: home },
+            // { label: "Inicio", icon: "home", target: home },
             { label: "Productos", icon: "package", target: "productos" },
-            { label: "Yo", icon: "users", target: "roles" },
+            { label: "Inicio", icon: "home", target: "roles" },
+            // { label: "Yo", icon: "users", target: "roles" },
           ];
 
-  // El rediseño navega solo con el botón atrás de la cabecera, sin barra inferior.
-  const showTabs = false;
+  const showTabs =
+    role !== null && ["afectado", "acopio", "logistica", "donante", "iniciativas"].includes(screen);
 
   /* ───────── Datos derivados ───────── */
 
   const activeNeeds = useMemo(() => {
-    const byId = new Map(network.centers.map((center) => [center.id, center]));
-    return network.needs.filter(
+    const byId = new Map(visibleCenters.map((center) => [center.id, center]));
+    return visibleNeeds.filter(
       (need) => need.status !== "blocked" && byId.get(need.centerId)?.status === "active" && remainingOf(need) > 0,
     );
-  }, [network]);
+  }, [visibleCenters, visibleNeeds]);
 
   const sortedCenters = useMemo(() => {
     // Primero los que reciben ayuda, luego los que ya tienen bastantes voluntarios,
-    // y al final los saturados. Dentro de cada grupo manda la necesidad real.
+    // y al final los saturados. Dentro de cada grupo manda la cercanía.
     const rank = (center: Center) =>
       center.status === "saturated" ? 2 : center.volunteersSaturated ? 1 : 0;
-    const list = [...network.centers];
+    const list = [...visibleCenters];
     list.sort((a, b) => {
       const byRank = rank(a) - rank(b);
       if (byRank !== 0) return byRank;
+      if (position) {
+        const byDistance = distanceKm(position, a) - distanceKm(position, b);
+        if (byDistance !== 0) return byDistance;
+      }
       const byNeed =
-        urgencyScore(b, network.needs, network.volunteerRequests) -
-        urgencyScore(a, network.needs, network.volunteerRequests);
+        urgencyScore(b, visibleNeeds, visibleVolunteerRequests) -
+        urgencyScore(a, visibleNeeds, visibleVolunteerRequests);
       if (byNeed !== 0) return byNeed;
-      if (position) return distanceKm(position, a) - distanceKm(position, b);
       return a.name.localeCompare(b.name, "es");
     });
     return list;
-  }, [network, position]);
+  }, [visibleCenters, visibleNeeds, visibleVolunteerRequests, position]);
 
   const knownCities = useMemo(
-    () => Array.from(new Set(network.centers.map((center) => center.city))).sort((a, b) => a.localeCompare(b, "es")),
-    [network.centers],
+    () => Array.from(new Set(visibleCenters.map((center) => center.city))).sort((a, b) => a.localeCompare(b, "es")),
+    [visibleCenters],
   );
 
   /* ───────── Render ───────── */
@@ -959,7 +1204,8 @@ export default function RedApoyoApp() {
             aria-label={position ? "Ubicación activa" : "Usar mi ubicación"}
             className={position ? "on" : ""}
           >
-            <UiIcon name="location" size={20} />
+           Ubicar
+          <UiIcon name="location" size={20} />
           </button>
         </header>
       )}
@@ -977,7 +1223,10 @@ export default function RedApoyoApp() {
             pulse={pulse}
             position={position}
             role={role}
+            cause={cause}
+            onCause={updateCause}
             onPick={chooseRole}
+            onAyuda={() => navigate("ayuda-rol")}
             onTutorial={() => navigate("tutorial")}
             onHoaxes={() => navigate("bulos")}
             onInitiatives={() => navigate("iniciativas")}
@@ -986,9 +1235,10 @@ export default function RedApoyoApp() {
               navigate("logistica");
             }}
             onNeeds={() => navigate("donante")}
-            onEmergency={() => navigate("personas")}
           />
         )}
+
+        {screen === "ayuda-rol" && <AyudaRoleScreen role={role} onPick={chooseRole} />}
 
         {screen === "tutorial" && <TutorialScreen onPick={chooseRole} />}
 
@@ -1029,12 +1279,25 @@ export default function RedApoyoApp() {
             busy={busy}
             onChoose={chooseCenter}
             onChangeCenter={forgetCenter}
+            onCreateCenter={openNewCenter}
             onProducts={openProducts}
             onReceived={openReceived}
             onHands={() => navigate("manos")}
-            onSaturation={() => navigate("saturado")}
-            onToggleVolunteers={() => void toggleVolunteers()}
-            onLiftSaturation={() => void setCenterSaturated(false)}
+            onCause={(value) => void setCenterCause(value)}
+            onDonationsAccepting={(value) => void setDonationsAccepting(value)}
+            onVolunteersAccepting={(value) => void setVolunteersAccepting(value)}
+            sharing={sharing}
+            onShare={() => void shareCenterNeeds()}
+          />
+        )}
+
+        {screen === "centro-nuevo" && (
+          <NewCenterScreen
+            draft={newCenter}
+            onDraft={setNewCenter}
+            cities={knownCities}
+            locating={locating}
+            onFlash={flash}
           />
         )}
 
@@ -1045,8 +1308,10 @@ export default function RedApoyoApp() {
             targets={targets}
             urgentCount={urgentCount}
             blockedCount={blockedCount}
+            customItems={customItems}
             onLevel={(name, level) => setLevels((current) => ({ ...current, [name]: level }))}
             onTarget={(name, value) => setTargets((current) => ({ ...current, [name]: value }))}
+            onAddCustom={addCustomProduct}
           />
         )}
 
@@ -1058,22 +1323,21 @@ export default function RedApoyoApp() {
           <SaturationScreen
             reason={saturationReason}
             onReason={setSaturationReason}
-            alternatives={sortedCenters
-              .filter((center) => center.status === "active" && !(role === "acopio" && center.id === myCenterId))
-              .slice(0, 3)}
-            needs={network.needs}
+            alternatives={sortedCenters.filter((center) => center.status === "active").slice(0, 3)}
+            needs={visibleNeeds}
             position={position}
           />
         )}
 
-        {screen === "personas" && <PeopleScreen onBack={goBack} />}
+        {screen === "personas" && <PeopleScreen />}
 
         {screen === "logistica" && (
           <LogisticsScreen
             centers={sortedCenters}
-            needs={network.needs}
-            requests={network.volunteerRequests}
+            needs={visibleNeeds}
+            requests={visibleVolunteerRequests}
             position={position}
+            onLocate={locate}
             busy={busy}
             loading={loading}
             view={pointsView}
@@ -1085,8 +1349,13 @@ export default function RedApoyoApp() {
         {screen === "donante" && (
           <DonorScreen
             needs={activeNeeds}
-            centers={network.centers}
+            centers={visibleCenters}
             position={position}
+            radiusKm={donorRadiusKm}
+            onClearRadius={() => setDonorRadiusKm(null)}
+            onExpandRadius={() =>
+              setDonorRadiusKm((current) => (current === null ? null : current < 15 ? 15 : null))
+            }
             loading={loading}
             pledge={stillValid(pledge) ? pledge : null}
             onInitiatives={() => navigate("iniciativas")}
@@ -1125,7 +1394,7 @@ export default function RedApoyoApp() {
 
         {screen === "bulos" && <HoaxesScreen />}
 
-        {screen === "done" && <DoneScreen kind={doneKind} body={doneBody} note={doneNote} route={doneRoute} onHome={() => navigate(home)} />}
+        {screen === "done" && <DoneScreen kind={doneKind} body={doneBody} note={doneNote} route={doneRoute} />}
       </main>
 
       {cta && (
@@ -1168,158 +1437,300 @@ function HomeScreen(props: {
   pulse: Pulse;
   position: Position | null;
   role: Role | null;
+  cause: Cause;
+  onCause: (cause: Cause) => void;
   onPick: (role: Role) => void;
+  onAyuda: () => void;
   onTutorial: () => void;
   onHoaxes: () => void;
   onInitiatives: () => void;
   onMap: () => void;
   onNeeds: () => void;
-  onEmergency: () => void;
 }) {
   const { pulse } = props;
   const saved = ROLES.find((item) => item.id === props.role);
-  const percent = pulse.goal > 0 ? Math.min(100, Math.round((pulse.delivered / pulse.goal) * 100)) : 0;
-  const list = (values: string[]) =>
-    Array.from(new Set(values)).slice(0, 3).join(", ");
+  const donar = ROLES.find((item) => item.id === "donante")!;
+  const voluntario = ROLES.find((item) => item.id === "logistica")!;
+  const where = (center: Center) =>
+    `${center.name} · ${center.city}${
+      props.position ? ` · a ${formatDistance(distanceKm(props.position, center))}` : ""
+    }`;
 
   return (
-    <section className="dc-body" style={{ padding: "22px 2px 34px", gap: 18 }}>
-      <span className="mark" aria-hidden="true"><UiIcon name="location" size={26} /></span>
-      <div style={{ display: "grid", gap: 8 }}>
-        <h1 className="dc-title">¿Cómo estás ayudando hoy?</h1>
-        <p className="dc-lead">Entra sin registro. Puedes cambiar de rol cuando quieras.</p>
+    <section className="roles">
+
+      <div className="roles-head">
+        <h1>QuieroAyudar.co</h1>
+        <button type="button" className="pill soft howto-pill" onClick={props.onTutorial}>
+          ¿Cómo funciona?
+        </button>
       </div>
 
-      {/*
-        Atajos a lo que sirve sin haber elegido rol todavía. No fijan rol a
-        propósito: mirar no es comprometerse.
+      {/* Dos emergencias activas a la vez: esto elige cuál se ve en el resto de la app. */}
+      <div className="cause-switch" role="radiogroup" aria-label="Emergencia a apoyar">
+        {CAUSES.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="radio"
+            aria-checked={props.cause === item.id}
+            className={`cause-option${props.cause === item.id ? " on" : ""} cause-${item.id}`}
+            onClick={() => props.onCause(item.id)}
+          >
+            <UiIcon name={item.id === "tolima" ? "flame" : "alert"} size={18} />
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+            {/*
+        Atajos a lo que sirve sin haber elegido rol todavía: ver dónde están los
+        puntos, qué se está pidiendo y qué empresas están recibiendo donaciones.
+        No fijan rol a propósito: mirar no es comprometerse.
       */}
+      
       <nav className="shortcuts" aria-label="Accesos directos">
         <button type="button" onClick={props.onMap}>
-          <span><UiIcon name="location" size={18} /></span>
-          Mapa de puntos
+          <span><UiIcon name="location" size={16} /></span>
+          Puntos de Acopio
         </button>
         <button type="button" onClick={props.onNeeds}>
-          <span><UiIcon name="alert" size={18} /></span>
-          Se necesita ahora
+          <span><UiIcon name="alert" size={16} /></span>
+          Productos Urgentes
         </button>
         <button type="button" onClick={props.onInitiatives}>
-          <span><UiIcon name="reports" size={18} /></span>
-          Empresas que donan
+          <span><UiIcon name="reports" size={16} /></span>
+          Iniciativas
         </button>
       </nav>
+
 
       {saved && (
         <button type="button" className="row-card resume" onClick={() => props.onPick(saved.id)}>
           <span className="code">{saved.code}</span>
           <span className="copy">
-            <strong>Seguir como {saved.title.toLowerCase()}</strong>
+            <strong>Seguir como {saved.resumeLabel}</strong>
             <small>Retomas donde ibas, con tu centro y tus marcas</small>
           </span>
-          <UiIcon name="arrow-right" size={19} />
+          <UiIcon name="arrow-right" size={20} />
         </button>
       )}
 
-      <div className="stack">
-        {ROLES.filter((role) => role.id !== saved?.id).map((role) => (
-          <button key={role.id} type="button" className="row-card" onClick={() => props.onPick(role.id)}>
-            <span className="code">{role.code}</span>
-            <span className="copy">
-              <strong>{role.title}</strong>
-              <small>{role.text}</small>
-            </span>
-            <UiIcon name="arrow-right" size={18} />
-          </button>
-        ))}
 
-        <a className="row-card coord-entry" href="/coordinar">
+
+      <h2><strong>¿Qué quieres hacer?</strong></h2>
+      <p className="lead-text">Entra sin registro. Puedes cambiar de role cuando quieras.</p>
+
+      <div className="stack">
+        <button type="button" className="row-card" onClick={() => props.onPick(donar.id)}>
+          <span className="code">
+            <UiIcon name="package" size={20} />
+          </span>
+          <span className="copy">
+            <strong>{donar.title}</strong>
+            <small>{donar.text}</small>
+          </span>
+          <UiIcon name="arrow-right" size={20} />
+        </button>
+        <button type="button" className="row-card" onClick={() => props.onPick(voluntario.id)}>
+          <span className="code">
+            
+          <UiIcon name="users" size={20} />
+
+          </span>
+          <span className="copy">
+            <strong>{voluntario.title}</strong>
+            <small>{voluntario.text}</small>
+          </span>
+          <UiIcon name="arrow-right" size={20} />
+        </button>
+        <button type="button" className="row-card" onClick={props.onAyuda}>
+          <span className="code"><UiIcon name="location" size={20} /></span>
+
+          <span className="copy">
+            <strong>Gestionar punto de acopio o zona afectada</strong>
+            <small>Reportar lo que falta en tu zona o centro</small>
+          </span>
+          <UiIcon name="arrow-right" size={20} />
+        </button>
+
+        {/*
+          Alta de centros: quien coordina un acopio entra al panel completo, donde
+          puede registrar uno a uno o subir el listado entero en Excel. Va aquí,
+          entre las cajas de inicio, porque llega gente con la lista ya hecha.
+        */}
+        {/* <a className="row-card coord-entry" href="/coordinar">
           <span className="code">CA</span>
           <span className="copy">
             <strong>Registrar centros de acopio</strong>
-            <small>Panel de coordinación · alta individual o carga masiva</small>
+            <small>Panel de coordinación: alta individual o carga masiva por Excel</small>
           </span>
-          <UiIcon name="arrow-right" size={18} />
-        </a>
+          <UiIcon name="arrow-right" size={20} />
+        </a> */}
       </div>
 
-      <button type="button" className="ghost-row" onClick={props.onTutorial}>
-        <UiIcon name="alert" size={17} />
-        ¿Es tu primera vez? Mira cómo funciona en un minuto
-      </button>
+      <section className="howto-card">
+        <strong>¿Es tu primera vez?</strong>
+        <p>
+          No necesitas cuenta. Elige una puerta y la app te va guiando. Solo pedimos verificar
+          identidad para reportar personas heridas.
+        </p>
+        <button type="button" className="ghost-row" onClick={props.onTutorial}>
+          <UiIcon name="alert" size={18} />
+          Ver los pasos
+        </button>
+      </section>
 
       <button type="button" className="ghost-row" onClick={props.onHoaxes}>
         <UiIcon name="close" size={17} />
         Noticias falsas que están circulando
       </button>
 
-      <section style={{ display: "grid", gap: 10, paddingTop: 4 }}>
-        <h2 className="dc-h" style={{ fontSize: "15px", margin: 0 }}>Ahora mismo</h2>
-
-        <div className="dc-stats">
+      <section className="pulse">
+        <h2>Ahora mismo</h2>
+        <div className="figures">
           <div><strong>{pulse.centers}</strong><small>puntos activos</small></div>
           <div><strong>{pulse.cities}</strong><small>ciudades</small></div>
-          <div><strong>{pulse.hands}</strong><small>manos en terreno</small></div>
+          {/* <div><strong>{pulse.hands}</strong><small>manos en terreno</small></div> */}
         </div>
 
-        {/* Cuatro datos, uno por tarjeta: la rejilla se lee de un vistazo. */}
-        <div className="dc-tiles">
-          <article className="dc-card sm">
-            <span className="dc-eyebrow soft">Qué falta</span>
-            <strong className="dc-h" style={{ fontSize: "13px", lineHeight: 1.3 }}>
-              {pulse.missing.length > 0 ? list(pulse.missing.map((row) => row.need.name)) : "Nada publicado"}
-            </strong>
-            <span style={{ color: "#dc2626", fontSize: "11px", fontWeight: 500 }}>
-              {pulse.urgent} urgencias abiertas
-            </span>
-          </article>
+        {/* <article className="pulse-card">
+          <h3><UiIcon name="package" size={17} />Se necesita ahora</h3>
+          {pulse.missing.length === 0 ? (
+            <PulseEmpty
+              text="Ningún centro ha publicado qué le falta."
+              action="Atiendo un centro y quiero publicarlo"
+              onAction={() => props.onPick("acopio")}
+            />
+          ) : (
+            <ul>
+              {pulse.missing.map((row) => (
+                <li key={row.need.id}>
+                  <strong>
+                    {row.missing} {row.need.unit} de {row.need.name}
+                  </strong>
+                  <small>{where(row.center)}</small>
+                </li>
+              ))}
+            </ul>
+          )}
+        </article>
 
-          <article className="dc-card sm">
-            <span className="dc-eyebrow soft">Cuánto se entregó</span>
-            <strong className="dc-h" style={{ fontSize: "13px", lineHeight: 1.3 }}>
-              {pulse.goal > 0 ? `${percent}% de lo pedido` : "Sin metas aún"}
-            </strong>
-            <span className="dc-bar"><i style={{ background: "#059669", width: `${percent}%` }} /></span>
-          </article>
+        <article className="pulse-card">
+          <h3><UiIcon name="check" size={17} />Lo que ya se logró</h3>
+          {pulse.goal === 0 ? (
+            <PulseEmpty
+              text="Todavía no hay metas publicadas que medir."
+              action="Publicar lo que necesita mi centro"
+              onAction={() => props.onPick("acopio")}
+            />
+          ) : (
+            <>
+              <p className="big">
+                {pulse.delivered} <span>de {pulse.goal} entregados</span>
+              </p>
+              <div className="bar" role="img" aria-label={`${pulse.delivered} de ${pulse.goal} entregados`}>
+                <i style={{ width: `${Math.min(100, Math.round((pulse.delivered / pulse.goal) * 100))}%` }} />
+              </div>
+              <small>
+                {pulse.promised > 0
+                  ? `${pulse.promised} más van en camino, ya prometidos por donantes.`
+                  : "Cuenta solo lo que los centros confirmaron haber recibido."}
+              </small>
+            </>
+          )}
+        </article>
 
-          <article className="dc-card sm">
-            <span className="dc-eyebrow soft">Quién trabaja</span>
-            <strong className="dc-h" style={{ fontSize: "13px", lineHeight: 1.3 }}>
-              {pulse.working.length} centros reportando
-            </strong>
-            <span style={{ color: "#64748b", fontSize: "11px", fontWeight: 500 }}>
-              {pulse.hands} personas en terreno
-            </span>
-          </article>
+        <article className="pulse-card">
+          <h3><UiIcon name="users" size={17} />Quién está trabajando</h3>
+          {pulse.working.length === 0 ? (
+            <PulseEmpty
+              text="Nadie se ha apuntado todavía a una tarea."
+              action="Puedo ir a echar una mano"
+              onAction={() => props.onPick("logistica")}
+            />
+          ) : (
+            <ul>
+              {pulse.working.map((row) => (
+                <li key={row.request.id}>
+                  <strong>
+                    {row.request.accepted} {row.request.accepted === 1 ? "persona" : "personas"} en {row.request.kind}
+                  </strong>
+                  <small>{where(row.center)}</small>
+                </li>
+              ))}
+            </ul>
+          )}
+        </article> */}
 
-          <article className="dc-card sm">
-            <span className="dc-eyebrow soft">Dónde faltan manos</span>
-            <strong className="dc-h" style={{ fontSize: "13px", lineHeight: 1.3 }}>
-              {pulse.wanted.length > 0 ? list(pulse.wanted.map((row) => row.center.city)) : "Sin solicitudes"}
-            </strong>
-            <span style={{ color: "#d97706", fontSize: "11px", fontWeight: 500 }}>
-              {pulse.handsWanted} personas pedidas
-            </span>
-          </article>
-        </div>
+        <article className="pulse-card">
+          <h3><UiIcon name="alert" size={17} />Dónde faltan manos</h3>
+          {pulse.wanted.length === 0 ? (
+            <PulseEmpty
+              text="Ningún centro ha pedido voluntarios."
+              action="Atiendo un centro y necesito gente"
+              onAction={() => props.onPick("acopio")}
+            />
+          ) : (
+            <ul>
+              {pulse.wanted.map((row) => (
+                <li key={row.request.id}>
+                  <strong>
+                    Faltan {row.missing} para {row.request.kind}
+                  </strong>
+                  <small>{where(row.center)}</small>
+                </li>
+              ))}
+            </ul>
+          )}
+        </article>
       </section>
 
-      {/*
-        La emergencia va abajo y en rojo: no compite con los roles, pero deja de ser
-        letra pequeña. Lleva a la pantalla que explica por qué eso no se publica aquí.
-      */}
-      <div className="home-foot">
-        <button type="button" className="emergency-row" onClick={props.onEmergency}>
-          <strong>¿Hay una persona herida? Línea 123</strong>
-          <UiIcon name="arrow-right" size={17} />
-        </button>
-        <p className="fineprint center">
-          Esta app no recauda dinero. Solo conecta necesidades con quien puede cubrirlas.
-        </p>
+      <p className="fineprint">
+        Si hay vidas en riesgo, llama al <a href="tel:123">123</a> antes de publicar aquí.
+      </p>
+    </section>
+  );
+}
+
+/**
+ * "Pedir ayuda" agrupa dos roles distintos (afectado y acopio) detrás de una sola
+ * puerta. Se confirma el rol aquí aunque venga premarcado por el dispositivo: el
+ * teléfono puede ser compartido y elegir el rol equivocado manda al flujo equivocado.
+ */
+function AyudaRoleScreen({ role, onPick }: { role: Role | null; onPick: (role: Role) => void }) {
+  const options = ROLES.filter((item) => item.id === "afectado" || item.id === "acopio");
+
+  return (
+    <section className="roles">
+      <h1>¿En dónde estas?</h1>
+
+      <div className="stack">
+        {options.map((option) => (
+          <button key={option.id} type="button" className="row-card" onClick={() => onPick(option.id)}>
+            <span className="code">{option.code}</span>
+            <span className="copy">
+              <strong>{option.title}</strong>
+              <small>{option.text}</small>
+            </span>
+            {option.id === role && <span className="tag">ÚLTIMA VEZ</span>}
+            <UiIcon name="arrow-right" size={20} />
+          </button>
+        ))}
       </div>
     </section>
   );
 }
 
+/** Un hueco vacío que propone la acción que lo llenaría, en vez de dar lástima. */
+function PulseEmpty(props: { text: string; action: string; onAction: () => void }) {
+  return (
+    <div className="pulse-empty">
+      <p>{props.text}</p>
+      <button type="button" onClick={props.onAction}>{props.action}</button>
+    </div>
+  );
+}
 
 const TUTORIAL: { role: Role; title: string; steps: string[] }[] = [
   {
@@ -1408,71 +1819,56 @@ function AffectedHome(props: {
 }) {
   const nearby = props.reports.filter((report) => !props.city || report.city === props.city).slice(0, 3);
   return (
-    <div className="dc-body">
-      <section className="dc-card">
-        <span className="dc-eyebrow">Dónde estás</span>
-        <input
-          className="dc-input"
-          list="ciudades-conocidas"
-          value={props.city}
-          onChange={(event) => props.onCity(event.target.value)}
-          autoComplete="address-level2"
-          placeholder="Escribe tu ciudad"
-          aria-label="Ciudad o municipio"
-        />
-        <datalist id="ciudades-conocidas">
-          {props.cities.map((city) => <option key={city} value={city} />)}
-        </datalist>
-        <input
-          className="dc-input"
-          value={props.reference}
-          onChange={(event) => props.onReference(event.target.value)}
-          placeholder="Barrio o vereda (opcional)"
-          aria-label="Barrio o referencia"
-        />
-        <button type="button" className="dc-dashed" onClick={props.onLocate} disabled={props.locating}>
-          {props.locating ? "Buscando tu ubicación…" : props.gpsLabel || "Usar mi ubicación GPS"}
-        </button>
+    <>
+      <section className="place-card">
+        <span className="eyebrow">¿Dónde estás?</span>
+        <label>
+          <span>Ciudad o municipio</span>
+          <input
+            list="ciudades-conocidas"
+            value={props.city}
+            onChange={(event) => props.onCity(event.target.value)}
+            autoComplete="address-level2"
+            placeholder="Ej. Bogotá"
+          />
+          <datalist id="ciudades-conocidas">
+            {props.cities.map((city) => <option key={city} value={city} />)}
+          </datalist>
+        </label>
+        <label>
+          <span>Barrio o referencia <small>opcional</small></span>
+          <div className="with-button">
+            <input
+              value={props.reference}
+              onChange={(event) => props.onReference(event.target.value)}
+              placeholder={props.gpsLabel || "Barrio, vereda o punto conocido"}
+            />
+            <button type="button" onClick={props.onLocate} disabled={props.locating} aria-label="Usar mi ubicación">
+              <UiIcon name="location" size={19} />
+            </button>
+          </div>
+        </label>
       </section>
 
-      <p className="dc-h">Qué quieres reportar</p>
-      <div className="dc-tiles">
-        <button type="button" className="dc-tile" onClick={props.onProducts}>
-          <span><UiIcon name="package" size={18} /></span>
-          <strong>Productos que faltan</strong>
-        </button>
-        <button type="button" className="dc-tile" onClick={props.onHands}>
-          <span><UiIcon name="users" size={18} /></span>
-          <strong>Pedir manos</strong>
-        </button>
-        <button type="button" className="dc-tile warn" onClick={props.onSaturation}>
-          <span><UiIcon name="alert" size={18} /></span>
-          <strong>Centro saturado</strong>
-        </button>
-        <button type="button" className="dc-tile danger" onClick={props.onPeople}>
-          <span><UiIcon name="reports" size={18} /></span>
-          <strong>Persona herida</strong>
-        </button>
+      <div className="stack">
+        <ActionRow icon="package" title="Productos que necesitamos" text="Marca urgente, se necesita o ya hay" onClick={props.onProducts} />
+        <ActionRow icon="users" title="Solicitar manos" text="Escombros, médicos, cocina, conductores" onClick={props.onHands} />
+        <ActionRow icon="alert" title="Reportar saturación" text="Que dejen de llegar a este punto" onClick={props.onSaturation} />
+        <ActionRow icon="reports" title="Persona herida o atrapada" text="Atención oficial de emergencias" onClick={props.onPeople} tag="123" />
       </div>
 
       {nearby.length > 0 && (
-        <section className="dc-body" style={{ gap: 8, padding: 0 }}>
-          <div className="dc-kv">
-            <strong className="dc-h">Reportes de tu ciudad</strong>
-            <span className="dc-sub">{props.city || "Todas"}</span>
-          </div>
+        <section className="feed">
+          <h2>Publicado desde el terreno</h2>
           {nearby.map((report) => (
-            <article className="dc-card sm" key={report.id}>
-              <div className="dc-kv">
-                <strong style={{ fontSize: "12.5px", lineHeight: 1.3 }}>{report.location}</strong>
-                <span style={{ color: "#94a3b8", fontSize: "10.5px", fontWeight: 500 }}>{since(report.createdAt)}</span>
-              </div>
-              <p className="dc-sub" style={{ margin: 0 }}>{report.details}</p>
+            <article key={report.id}>
+              <strong>{report.location}</strong>
+              <p>{report.details}</p>
             </article>
           ))}
         </section>
       )}
-    </div>
+    </>
   );
 }
 
@@ -1486,12 +1882,15 @@ function CenterHome(props: {
   busy: boolean;
   onChoose: (id: string) => void;
   onChangeCenter: () => void;
+  onCreateCenter: () => void;
   onProducts: () => void;
   onReceived: () => void;
   onHands: () => void;
-  onSaturation: () => void;
-  onToggleVolunteers: () => void;
-  onLiftSaturation: () => void;
+  onCause: (value: Cause) => void;
+  onDonationsAccepting: (value: boolean) => void;
+  onVolunteersAccepting: (value: boolean) => void;
+  sharing: boolean;
+  onShare: () => void;
 }) {
   const center = props.center;
   const [view, setView] = useState<"lista" | "mapa">("lista");
@@ -1509,7 +1908,13 @@ function CenterHome(props: {
         <h2 className="lead">¿Cuál es tu centro?</h2>
         <p className="lead-text">Lo recordamos en este dispositivo. Lo que publiques quedará a su nombre.</p>
         {props.centers.length === 0 ? (
-          <p className="empty">Todavía no hay centros publicados.</p>
+          <>
+            <p className="empty">Todavía no hay centros publicados.</p>
+            <button type="button" className="link-row" onClick={props.onCreateCenter}>
+            <UiIcon name="plus" size={16} />
+            Crea un centro de acopio aquí.
+          </button>
+          </>
         ) : view === "mapa" ? (
           <>
             <ViewSwitch view={view} onView={setView} />
@@ -1526,7 +1931,15 @@ function CenterHome(props: {
           <>
           <ViewSwitch view={view} onView={setView} />
           <SearchBox value={query} onValue={setQuery} label="Buscar por nombre o ciudad" icon="building" />
-          {matching.length === 0 && <p className="empty">Ningún centro coincide con “{query}”.</p>}
+          {matching.length === 0 && 
+          <>
+            <p className="empty">Ningún centro coincide con “{query}”.</p>
+            <button type="button" className="link-row" onClick={props.onCreateCenter}>
+              <UiIcon name="plus" size={16} />
+              Crea un centro de acopio aquí.
+            </button>
+          </>
+          }
           {groupByCity(matching, props.position).map((block) => (
             <section className="group" key={block.city}>
               <h2>
@@ -1548,14 +1961,13 @@ function CenterHome(props: {
           ))}
           </>
         )}
-        <p className="fineprint">
-          ¿Tu centro no aparece? <a href="/coordinar">Regístralo en coordinación</a>.
-        </p>
+        
       </section>
     );
   }
 
   const urgent = props.needs.filter((need) => need.centerId === center.id && need.status === "urgent").length;
+  const needed = props.needs.filter((need) => need.centerId === center.id && need.status === "normal").length;
   const hands = props.requests
     .filter((item) => item.centerId === center.id && item.status === "open")
     .reduce((sum, item) => sum + Math.max(0, item.quantity - item.accepted), 0);
@@ -1565,27 +1977,27 @@ function CenterHome(props: {
     <>
       <section className="summary">
         <div><strong>{urgent}</strong><small>productos urgentes</small></div>
+        <div><strong>{needed}</strong><small>productos necesitados</small></div>
         <div><strong>{hands}</strong><small>manos solicitadas</small></div>
       </section>
 
-      {/* El interruptor es la única forma de volver: marcar saturado no puede ser de ida. */}
       <section className="switch-card">
         <div>
-          <strong>Nuestro centro está saturado</strong>
+          <strong>Se aceptan donaciones</strong>
           <small>
             {center.status === "saturated"
-              ? "No apareces como destino sugerido. Quítalo cuando baje la afluencia."
-              : "Deja de recibir gente y donaciones."}
+              ? "No apareces como destino sugerido. Actívalo cuando vuelvas a recibir."
+              : "Apágalo si dejas de recibir gente y donaciones."}
           </small>
         </div>
         <button
           type="button"
           role="switch"
-          aria-checked={center.status === "saturated"}
-          aria-label="Nuestro centro está saturado"
-          className={center.status === "saturated" ? "on danger" : ""}
+          aria-checked={center.status !== "saturated"}
+          aria-label="Se aceptan donaciones"
+          className={center.status !== "saturated" ? "on" : ""}
           disabled={props.busy}
-          onClick={center.status === "saturated" ? props.onLiftSaturation : props.onSaturation}
+          onClick={() => props.onDonationsAccepting(center.status === "saturated")}
         >
           <i />
         </button>
@@ -1593,21 +2005,30 @@ function CenterHome(props: {
 
       <section className="switch-card">
         <div>
-          <strong>Ya tenemos suficientes voluntarios</strong>
-          <small>Los voluntarios nuevos verán otros centros primero.</small>
+          <strong>Se aceptan voluntarios</strong>
+          <small>
+            {center.volunteersSaturated
+              ? "Los voluntarios nuevos ven otros centros primero. Actívalo cuando necesites más."
+              : "Apágalo si ya tienes suficientes voluntarios."}
+          </small>
         </div>
         <button
           type="button"
           role="switch"
-          aria-checked={Boolean(center.volunteersSaturated)}
-          aria-label="Ya tenemos suficientes voluntarios"
-          className={center.volunteersSaturated ? "on" : ""}
+          aria-checked={!center.volunteersSaturated}
+          aria-label="Se aceptan voluntarios"
+          className={!center.volunteersSaturated ? "on" : ""}
           disabled={props.busy}
-          onClick={props.onToggleVolunteers}
+          onClick={() => props.onVolunteersAccepting(Boolean(center.volunteersSaturated))}
         >
           <i />
         </button>
       </section>
+
+      <button type="button" className="ghost-row" disabled={props.sharing} onClick={props.onShare}>
+        <UiIcon name="share" size={18} />
+        {props.sharing ? "Generando imagen…" : "Compartir necesidades en Instagram"}
+      </button>
 
       <div className="stack">
         <ActionRow icon="package" title="Publicar qué necesitamos" text="Estado y meta por producto" onClick={props.onProducts} />
@@ -1615,6 +2036,27 @@ function CenterHome(props: {
         <ActionRow icon="users" title="Solicitar manos" text="Tarea y número de personas" onClick={props.onHands} />
         <ActionRow icon="building" title="Cambiar de centro" text="Elegir otro acopio en este dispositivo" onClick={props.onChangeCenter} />
       </div>
+
+      <section className="place-card">
+        <label>
+          <span>Causa a la que apoya este centro</span>
+          <div className="cause-switch" role="radiogroup" aria-label="Causa del centro">
+            {CAUSES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="radio"
+                aria-checked={causeOf(center) === item.id}
+                className={`cause-option${causeOf(center) === item.id ? " on" : ""} cause-${item.id}`}
+                onClick={() => props.onCause(item.id)}
+              >
+                <UiIcon name={item.id === "tolima" ? "flame" : "alert"} size={18} />
+                {item.short}
+              </button>
+            ))}
+          </div>
+        </label>
+      </section>
 
       {inbox.length > 0 && (
         <section className="feed">
@@ -1631,77 +2073,354 @@ function CenterHome(props: {
   );
 }
 
+/**
+ * Alta pública de un centro nuevo: el back ya la acepta sin código de coordinador
+ * (POST /v1/centers), así que no hace falta mandar a nadie a /coordinar para esto.
+ */
+function NewCenterScreen(props: {
+  draft: NewCenterDraft;
+  onDraft: Dispatch<SetStateAction<NewCenterDraft>>;
+  cities: string[];
+  locating: boolean;
+  onFlash: (text: string) => void;
+}) {
+  const set = props.onDraft;
+  const [link, setLink] = useState("");
+  const [resolvingLink, setResolvingLink] = useState(false);
+  const [resolvingPosition, setResolvingPosition] = useState(false);
+  const located = props.draft.latitude !== "" && props.draft.longitude !== "";
+
+  // Rellena nombre/dirección/ciudad sin pisar lo que la persona ya haya escrito a mano.
+  function fillPlaceDetails(data: { name: string | null; address: string | null; city: string | null }) {
+    if (!data.name && !data.address && !data.city) return false;
+    set((current) => ({
+      ...current,
+      name: current.name.trim() ? current.name : data.name ?? current.name,
+      city: current.city.trim() ? current.city : data.city ?? current.city,
+      address: current.address.trim() ? current.address : data.address ?? current.address,
+    }));
+    return true;
+  }
+
+  function takePosition() {
+    if (!("geolocation" in navigator)) {
+      props.onFlash("Este dispositivo no permite compartir ubicación.");
+      return;
+    }
+    props.onFlash("Buscando tu ubicación…");
+    navigator.geolocation.getCurrentPosition(
+      (result) => {
+        const latitude = result.coords.latitude;
+        const longitude = result.coords.longitude;
+        set((current) => ({ ...current, latitude: latitude.toFixed(6), longitude: longitude.toFixed(6) }));
+        props.onFlash("Ubicación tomada.");
+        void fillPositionDetails(latitude, longitude);
+      },
+      () => props.onFlash("No pudimos leer tu ubicación. Pega el enlace del mapa."),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+    );
+  }
+
+  // La ubicación por GPS solo trae coordenadas: se completan nombre/dirección/ciudad
+  // con la misma geocodificación inversa (Nominatim) que usa el enlace de Maps.
+  async function fillPositionDetails(latitude: number, longitude: number) {
+    setResolvingPosition(true);
+    try {
+      const response = await fetch(`/api/reverse-geocode?lat=${latitude}&lng=${longitude}`);
+      if (!response.ok) return;
+      const data = (await response.json()) as { name: string | null; address: string | null; city: string | null };
+      if (fillPlaceDetails(data)) props.onFlash("Nombre y dirección tomados de tu ubicación.");
+    } catch {
+      // Silencioso: ya quedó la ubicación tomada, esto es solo un complemento.
+    } finally {
+      setResolvingPosition(false);
+    }
+  }
+
+  function applyCoordinates(found: { latitude: number; longitude: number }) {
+    set((current) => ({ ...current, latitude: found.latitude.toFixed(6), longitude: found.longitude.toFixed(6) }));
+    props.onFlash("Ubicación tomada del enlace.");
+  }
+
+  async function applyLink(value: string) {
+    setLink(value);
+    const trimmed = value.trim();
+    const found = parseCoordinates(trimmed);
+    if (found) applyCoordinates(found);
+
+    if (!/^https?:\/\//i.test(trimmed)) return;
+
+    setResolvingLink(true);
+    try {
+      const response = await fetch(`/api/resolve-map-link?url=${encodeURIComponent(trimmed)}`);
+      if (!response.ok) {
+        if (!found) props.onFlash("No pudimos leer ese enlace. Prueba con las coordenadas.");
+        return;
+      }
+      const data = (await response.json()) as {
+        latitude: number | null;
+        longitude: number | null;
+        name: string | null;
+        address: string | null;
+        city: string | null;
+      };
+      if (!found && data.latitude != null && data.longitude != null) {
+        applyCoordinates({ latitude: data.latitude, longitude: data.longitude });
+      } else if (!found) {
+        props.onFlash("No pudimos leer la ubicación de ese enlace. Prueba con las coordenadas.");
+      }
+      if (fillPlaceDetails(data)) props.onFlash("Nombre y dirección tomados del enlace.");
+    } catch {
+      if (!found) props.onFlash("No pudimos leer la ubicación de ese enlace. Prueba con las coordenadas.");
+    } finally {
+      setResolvingLink(false);
+    }
+  }
+
+  return (
+    <>
+      <p className="lead-text">Queda publicado de una vez: lo ven donantes y voluntarios apenas lo guardas.</p>
+      <button type="button" className="big-choice" onClick={takePosition} disabled={props.locating}>
+        <span><UiIcon name="location" size={24} /></span>
+        <strong>Estoy en el centro ahora</strong>
+        <small>Toma la ubicación de tu teléfono</small>
+      </button>
+
+      <section className="place-card">
+        <label>
+          <span>O pega el enlace de Google Maps <small>también sirven las coordenadas sueltas</small></span>
+          <input
+            value={link}
+            inputMode="url"
+            placeholder="https://maps.google.com/…  o  6.2412, -75.5628"
+            onChange={(event) => void applyLink(event.target.value)}
+          />
+        </label>
+      </section>
+      <section className="place-card">
+        <label>
+          <span>Causa a la que apoya</span>
+          <div className="chips" role="radiogroup" aria-label="Causa del centro">
+            {CAUSES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="radio"
+                aria-checked={props.draft.cause === item.id}
+                className={`chip${props.draft.cause === item.id ? " on" : ""}`}
+                onClick={() => set((current) => ({ ...current, cause: item.id }))}
+              >
+                {item.short}
+              </button>
+            ))}
+          </div>
+        </label>
+        <label>
+          <span>Nombre del centro</span>
+          <input
+            value={props.draft.name}
+            placeholder="Parroquia San José"
+            onChange={(event) => set((current) => ({ ...current, name: event.target.value }))}
+          />
+        </label>
+        <label>
+          <span>Ciudad o municipio</span>
+          <input
+            list="ciudades-conocidas-centro"
+            value={props.draft.city}
+            autoComplete="address-level2"
+            placeholder="Medellín"
+            onChange={(event) => set((current) => ({ ...current, city: event.target.value }))}
+          />
+          <datalist id="ciudades-conocidas-centro">
+            {props.cities.map((city) => <option key={city} value={city} />)}
+          </datalist>
+        </label>
+        <label>
+          <span>Dirección</span>
+          <input
+            value={props.draft.address}
+            autoComplete="street-address"
+            placeholder="Calle 45 #33-12"
+            onChange={(event) => set((current) => ({ ...current, address: event.target.value }))}
+          />
+        </label>
+        <label>
+          <span>Teléfono <small>opcional</small></span>
+          <input
+            type="tel"
+            autoComplete="tel"
+            value={props.draft.contact}
+            placeholder="300 123 4567"
+            onChange={(event) => set((current) => ({ ...current, contact: event.target.value }))}
+          />
+        </label>
+        <label>
+          <span>Horario <small>opcional</small></span>
+          <input
+            value={props.draft.hours}
+            placeholder="8 a. m. a 6 p. m."
+            onChange={(event) => set((current) => ({ ...current, hours: event.target.value }))}
+          />
+        </label>
+      </section>
+
+      {resolvingLink && <p className="lead-text">Resolviendo enlace…</p>}
+      {resolvingPosition && <p className="lead-text">Buscando datos del lugar…</p>}
+
+      {located && (
+        <section className="place-card located">
+          <span className="pill ok">Ubicación lista</span>
+          <strong>{Number(props.draft.latitude).toFixed(5)}, {Number(props.draft.longitude).toFixed(5)}</strong>
+        </section>
+      )}
+    </>
+  );
+}
+
+function ProductRow(props: {
+  item: CatalogItem;
+  level: Level;
+  target: number;
+  withTargets: boolean;
+  onLevel: (level: Level) => void;
+  onTarget: (value: number) => void;
+}) {
+  const { item, level, target } = props;
+  return (
+    <article className={`product ${level}`}>
+      <strong>{item.name}</strong>
+      <div className="states" role="group" aria-label={`Estado de ${item.name}`}>
+        <button type="button" aria-pressed={level === "urgent"} onClick={() => props.onLevel("urgent")}>Urgente</button>
+        <button type="button" aria-pressed={level === "normal"} onClick={() => props.onLevel("normal")}>Se necesita</button>
+        <button type="button" aria-pressed={level === "blocked"} onClick={() => props.onLevel("blocked")}>Ya hay</button>
+      </div>
+      {props.withTargets && level !== "blocked" && (
+        <div className="stepper small">
+          <span>Meta</span>
+          <button type="button" aria-label={`Reducir meta de ${item.name}`} onClick={() => props.onTarget(Math.max(1, target - item.step))}>
+            <UiIcon name="minus" size={18} />
+          </button>
+          <strong aria-live="polite">{target}</strong>
+          <button type="button" aria-label={`Aumentar meta de ${item.name}`} onClick={() => props.onTarget(Math.min(100000, target + item.step))}>
+            <UiIcon name="plus" size={18} />
+          </button>
+          <small>{item.unit}</small>
+        </div>
+      )}
+    </article>
+  );
+}
+
 function ProductsScreen(props: {
   withTargets: boolean;
   levels: Record<string, Level>;
   targets: Record<string, number>;
   urgentCount: number;
   blockedCount: number;
+  customItems: CatalogItem[];
   onLevel: (name: string, level: Level) => void;
   onTarget: (name: string, value: number) => void;
+  onAddCustom: (name: string, unit: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [customName, setCustomName] = useState("");
+  const [customUnit, setCustomUnit] = useState("");
   const key = norm(query);
 
-  // Buscar evita recorrer siete grupos para marcar un solo producto, que es lo
-  // que pasa cuando alguien entra sabiendo exactamente qué le falta.
+  // Sin búsqueda no se muestra nada del catálogo: son ~30 productos y la mayoría
+  // de las visitas vienen a marcar uno o dos. Buscar evita ese listado base y,
+  // si no hay coincidencia, es la señal de que hace falta agregarlo a mano.
   const groups = useMemo(
     () =>
-      CATALOG.map((section) => ({
-        ...section,
-        items: key ? section.items.filter((item) => norm(item.name).includes(key)) : section.items,
-      })).filter((section) => section.items.length > 0),
+      key
+        ? CATALOG.map((section) => ({
+            ...section,
+            items: section.items.filter((item) => norm(item.name).includes(key)),
+          })).filter((section) => section.items.length > 0)
+        : [],
     [key],
   );
+  const noMatches = key.length > 0 && groups.length === 0;
+  const suggestedName = customName || query.trim();
+
+  function addCustom() {
+    const name = suggestedName.trim();
+    if (!name) return;
+    props.onAddCustom(name, customUnit);
+    setCustomName("");
+    setCustomUnit("");
+    setQuery("");
+  }
 
   return (
     <>
-      <div className="dc-subhead">
-        <input
-          className="dc-input sm"
-          type="search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Buscar producto"
-          aria-label="Buscar un producto"
-        />
+      <div className="counters">
+        <span className="pill urgent">{props.urgentCount} urgentes</span>
+        <span className="pill ok">{props.blockedCount} suficientes</span>
       </div>
+      <SearchBox value={query} onValue={setQuery} label="Buscar un producto" icon="package" />
+      <p className="lead-text">“Ya hay” evita que otros lleven algo que ya está cubierto.</p>
 
-      <div className="dc-body wide-gap" style={{ padding: "14px 0 20px" }}>
-        {groups.length === 0 && <p className="empty">Ningún producto coincide con “{query}”.</p>}
-        {groups.map((section) => (
-          <section style={{ display: "grid", gap: 8 }} key={section.group}>
-            <span className="dc-eyebrow">{section.group}</span>
-            {section.items.map((item) => {
-              const level = props.levels[item.name] ?? "normal";
-              const target = props.targets[item.name] ?? item.start;
-              return (
-                <article className="dc-card sm" key={item.name} style={{ gap: 10 }}>
-                  <div className="dc-kv" style={{ alignItems: "center", gap: 8 }}>
-                    <strong style={{ fontSize: "13.5px", lineHeight: 1.2 }}>{item.name}</strong>
-                    <span style={{ color: "#94a3b8", fontSize: "11px", fontWeight: 500 }}>{item.unit}</span>
-                  </div>
-                  <div className="dc-states" role="group" aria-label={`Estado de ${item.name}`}>
-                    <button type="button" aria-pressed={level === "urgent"} onClick={() => props.onLevel(item.name, "urgent")}>Urgente</button>
-                    <button type="button" aria-pressed={level === "normal"} onClick={() => props.onLevel(item.name, "normal")}>Se necesita</button>
-                    <button type="button" aria-pressed={level === "blocked"} onClick={() => props.onLevel(item.name, "blocked")}>Ya hay</button>
-                  </div>
-                  {props.withTargets && level !== "blocked" && (
-                    <div className="dc-step-row">
-                      <span>Meta para tu centro</span>
-                      <div className="dc-step sm">
-                        <button type="button" aria-label={`Reducir meta de ${item.name}`} onClick={() => props.onTarget(item.name, Math.max(1, target - item.step))}>−</button>
-                        <strong aria-live="polite">{target}</strong>
-                        <button type="button" className="plus" aria-label={`Aumentar meta de ${item.name}`} onClick={() => props.onTarget(item.name, Math.min(100000, target + item.step))}>+</button>
-                      </div>
-                    </div>
-                  )}
-                </article>
-              );
-            })}
-          </section>
-        ))}
-      </div>
+      {groups.map((section) => (
+        <section className="group" key={section.group}>
+          <h2>{section.group}</h2>
+          {section.items.map((item) => (
+            <ProductRow
+              key={item.name}
+              item={item}
+              level={props.levels[item.name] ?? "normal"}
+              target={props.targets[item.name] ?? item.start}
+              withTargets={props.withTargets}
+              onLevel={(level) => props.onLevel(item.name, level)}
+              onTarget={(value) => props.onTarget(item.name, value)}
+            />
+          ))}
+        </section>
+      ))}
+
+      {noMatches && (
+        <section className="place-card">
+          <p className="empty">Ningún producto coincide con “{query}”.</p>
+          <label>
+            <span>Agregarlo como producto nuevo</span>
+            <input
+              value={suggestedName}
+              placeholder="Nombre del producto"
+              onChange={(event) => setCustomName(event.target.value)}
+            />
+          </label>
+          <label>
+            <span>Unidad <small>opcional</small></span>
+            <input
+              value={customUnit}
+              placeholder="unidades, kilos, cajas…"
+              onChange={(event) => setCustomUnit(event.target.value)}
+            />
+          </label>
+          <button type="button" className="ghost-row" onClick={addCustom} disabled={!suggestedName.trim()}>
+            <UiIcon name="plus" size={18} />
+            Agregar producto
+          </button>
+        </section>
+      )}
+
+      {props.customItems.length > 0 && (
+        <section className="group">
+          <h2>Otros productos</h2>
+          {props.customItems.map((item) => (
+            <ProductRow
+              key={item.name}
+              item={item}
+              level={props.levels[item.name] ?? "urgent"}
+              target={props.targets[item.name] ?? item.start}
+              withTargets={props.withTargets}
+              onLevel={(level) => props.onLevel(item.name, level)}
+              onTarget={(value) => props.onTarget(item.name, value)}
+            />
+          ))}
+        </section>
+      )}
     </>
   );
 }
@@ -1773,36 +2492,38 @@ function HandsScreen(props: {
   onQuantity: (value: number) => void;
 }) {
   return (
-    <div className="dc-body wide-gap">
-      <div style={{ display: "grid", gap: 8 }}>
-        <span className="dc-eyebrow">Tarea</span>
+    <>
+      <p className="lead-text">Elige una sola tarea para que sepan exactamente a qué van.</p>
+      <div className="stack">
         {HAND_OPTIONS.map((option) => (
           <button
             key={option.id}
             type="button"
-            className={`dc-pick${props.kind === option.id ? " on" : ""}`}
+            className={`pick-card${props.kind === option.id ? " on" : ""}`}
             aria-pressed={props.kind === option.id}
             onClick={() => props.onKind(option.id)}
           >
-            <span className="sigla">{initials(option.id)}</span>
-            <strong>{option.id}</strong>
-            {props.kind === option.id && <span className="check"><UiIcon name="check" size={14} /></span>}
+            <span className="radio" aria-hidden="true">{props.kind === option.id && <UiIcon name="check" size={14} />}</span>
+            <span className="copy">
+              <strong>{option.id}</strong>
+              <small>{option.detail}</small>
+            </span>
           </button>
         ))}
       </div>
-
-      <section className="dc-card">
-        <span className="dc-h" style={{ fontSize: "13px" }}>¿Cuántas personas?</span>
-        <div className="dc-step">
-          <button type="button" aria-label="Restar una persona" onClick={() => props.onQuantity(Math.max(1, props.quantity - 1))}>−</button>
+      <section className="stepper-card">
+        <span>¿Cuántas personas necesitas?</span>
+        <div className="stepper">
+          <button type="button" aria-label="Restar una persona" onClick={() => props.onQuantity(Math.max(1, props.quantity - 1))}>
+            <UiIcon name="minus" size={20} />
+          </button>
           <strong aria-live="polite">{props.quantity}</strong>
-          <button type="button" className="plus" aria-label="Sumar una persona" onClick={() => props.onQuantity(Math.min(60, props.quantity + 1))}>+</button>
+          <button type="button" aria-label="Sumar una persona" onClick={() => props.onQuantity(Math.min(60, props.quantity + 1))}>
+            <UiIcon name="plus" size={20} />
+          </button>
         </div>
-        <p style={{ color: "#94a3b8", fontSize: "11px", lineHeight: 1.3, margin: 0, textAlign: "center" }}>
-          Entre 1 y 60 personas
-        </p>
       </section>
-    </div>
+    </>
   );
 }
 
@@ -1814,74 +2535,64 @@ function SaturationScreen(props: {
   position: Position | null;
 }) {
   return (
-    <div className="dc-body wide-gap">
-      <div style={{ display: "grid", gap: 8 }}>
-        <span className="dc-eyebrow">Motivo</span>
+    <>
+      <p className="lead-text">Dejamos de enviar gente aquí y sugerimos los puntos con menos cobertura.</p>
+      <div className="stack">
         {SATURATION_OPTIONS.map((option) => (
           <button
             key={option.id}
             type="button"
-            className={`dc-pick radio${props.reason === option.id ? " on" : ""}`}
+            className={`pick-card${props.reason === option.id ? " on" : ""}`}
             aria-pressed={props.reason === option.id}
             onClick={() => props.onReason(option.id)}
           >
-            <span className="dot" aria-hidden="true"><i /></span>
-            <strong>{option.id}</strong>
+            <span className="radio" aria-hidden="true">{props.reason === option.id && <UiIcon name="check" size={14} />}</span>
+            <span className="copy">
+              <strong>{option.id}</strong>
+              <small>{option.detail}</small>
+            </span>
           </button>
         ))}
       </div>
 
       {props.alternatives.length > 0 && (
-        <div style={{ display: "grid", gap: 8 }}>
-          <p className="dc-h" style={{ fontSize: "13.5px", margin: 0 }}>Lleva lo que traías a estos centros</p>
+        <section className="feed">
+          <h2>Redirigir gente hacia</h2>
           {props.alternatives.map((center) => {
-            const urgent = props.needs.filter(
+            const missing = props.needs.filter(
               (need) => need.centerId === center.id && need.status === "urgent",
             ).length;
             return (
-              <article className="dc-card sm" key={center.id} style={{ gap: 8 }}>
-                <div className="dc-kv" style={{ alignItems: "flex-start", gap: 8 }}>
-                  <strong style={{ fontSize: "13px", lineHeight: 1.25 }}>{center.name}</strong>
-                  {props.position && (
-                    <span style={{ color: "#2563eb", flex: "none", fontSize: "11px", fontWeight: 600 }}>
-                      {formatDistance(distanceKm(props.position, center))}
-                    </span>
-                  )}
-                </div>
-                <p className="dc-sub" style={{ margin: 0 }}>
-                  {urgent > 0 ? `Urgente: ${urgent} productos` : "Recibiendo ayuda"}
+              <article key={center.id}>
+                <strong>{center.name}</strong>
+                <p>
+                  {missing > 0 ? `${missing} productos urgentes` : "Recibiendo ayuda"}
+                  {props.position ? ` · ${formatDistance(distanceKm(props.position, center))}` : ""}
                 </p>
-                <a className="dc-ghost" style={{ display: "block", textAlign: "center", textDecoration: "none" }}
-                   href={routeUrl(center)} target="_blank" rel="noreferrer">Ver ruta</a>
               </article>
             );
           })}
-        </div>
+        </section>
       )}
-    </div>
+    </>
   );
 }
 
-function PeopleScreen({ onBack }: { onBack: () => void }) {
+function PeopleScreen() {
   return (
-    <section className="dc-emergency">
-      <button type="button" className="dc-back" onClick={onBack} aria-label="Volver">
-        <UiIcon name="arrow-left" size={19} />
-      </button>
-      <div style={{ display: "grid", gap: 12, paddingTop: 30 }}>
-        <h2>Una persona herida no se reporta por la app</h2>
-        <p>
-          Llama al 123. Es la única vía que activa una ambulancia. Nadie en esta plataforma puede
-          atender una emergencia médica.
-        </p>
-      </div>
-      <a className="dc-call" href="tel:123">
-        <strong>123</strong>
-        <small>Llamar ahora</small>
-      </a>
-      <aside>
-        Si ya llamaste y el centro necesita insumos médicos, vuelve y publícalos como producto urgente.
-      </aside>
+    <section className="people">
+      <span className="mark alert" aria-hidden="true"><UiIcon name="alert" size={26} /></span>
+      <h2>Esto no se publica aquí</h2>
+      <p>
+        Los datos de personas heridas, atrapadas o desaparecidas no son públicos y no se registran
+        en esta aplicación. Llama directamente a los organismos oficiales: son los únicos que pueden
+        contactar a las familias.
+      </p>
+      <a className="call" href="tel:123">Llamar al 123</a>
+      <p className="fineprint">
+        Defensa Civil, Cruz Roja y Bomberos responden por esa línea. Esta plataforma no reemplaza la
+        atención de emergencias.
+      </p>
     </section>
   );
 }
@@ -1891,12 +2602,14 @@ function LogisticsScreen(props: {
   needs: Need[];
   requests: VolunteerRequest[];
   position: Position | null;
+  onLocate: () => void;
   busy: boolean;
   loading: boolean;
   view: "lista" | "mapa";
   onView: (value: "lista" | "mapa") => void;
   onAccept: (item: VolunteerRequest) => void;
 }) {
+  const [query, setQuery] = useState("");
   const [city, setCity] = useState("");
 
   const cities = useMemo(
@@ -1904,97 +2617,112 @@ function LogisticsScreen(props: {
     [props.centers],
   );
 
-  const shown = useMemo(
-    () => props.centers.filter((center) => !city || center.city === city),
-    [props.centers, city],
-  );
+  // Filtrar aquí y no dentro del mapa: el mapa recibe la misma lista ya recortada
+  // y así los dos modos enseñan exactamente lo mismo.
+  const shown = useMemo(() => {
+    const key = norm(query);
+    return props.centers.filter(
+      (center) =>
+        (!city || center.city === city) &&
+        (!key || norm(`${center.name} ${center.city} ${center.address}`).includes(key)),
+    );
+  }, [props.centers, query, city]);
 
+  if (props.loading) return <p className="empty">Sincronizando…</p>;
+  if (props.centers.length === 0) return <p className="empty">Todavía no hay centros publicados.</p>;
   return (
     <>
-      <div className="dc-subhead">
-        <div className="dc-chips">
-          <button type="button" aria-pressed={city === ""} onClick={() => setCity("")}>Todas</button>
-          {cities.map((name) => (
-            <button key={name} type="button" aria-pressed={city === name} onClick={() => setCity(name)}>{name}</button>
-          ))}
-        </div>
-      </div>
-
-      <div className="dc-body tight" style={{ padding: "14px 0 24px" }}>
-        <div className="dc-toggle" style={{ alignSelf: "flex-start" }} role="group" aria-label="Ver como">
-          <button type="button" aria-pressed={props.view === "lista"} onClick={() => props.onView("lista")}>Lista</button>
-          <button type="button" aria-pressed={props.view === "mapa"} onClick={() => props.onView("mapa")}>Mapa</button>
-        </div>
-
-        {props.view === "mapa" && (
+      <ViewSwitch view={props.view} onView={props.onView} />
+      <SearchBox value={query} onValue={setQuery} label="Buscar punto o ciudad" icon="building" />
+      <CityChips cities={cities} value={city} onValue={setCity} />
+      {shown.length === 0 && <p className="empty">Ningún punto coincide con lo que buscas.</p>}
+      {props.view === "mapa" ? (
+        <>
+          <p className="lead-text">
+            Toca un punto para ver qué le falta y abrir la ruta. El punto azul eres tú.
+          </p>
           <CentersMap
             centers={shown}
             needs={props.needs}
             requests={props.requests}
             position={props.position}
           />
+        </>
+      ) : (
+        <>
+      <div className="lead-row">
+        <p className="lead-text">
+          {props.position
+            ? "Ordenado desde tu ubicación actual."
+            : "Ordenado por necesidad real. Actívala para ordenarlo por cercanía."}
+        </p>
+        {props.position && (
+          <button type="button" className="link-row" onClick={props.onLocate}>Cambiar</button>
         )}
-
-        {props.loading && <p className="empty">Sincronizando…</p>}
-        {!props.loading && shown.length === 0 && <p className="empty">No hay puntos en esa ciudad.</p>}
-
+      </div>
+      <div className="stack">
         {shown.map((center) => {
           const open = props.requests.filter(
             (item) => item.centerId === center.id && item.status === "open" && item.accepted < item.quantity,
           );
-          const first = open[0];
-          const missing = open.reduce((total, item) => total + (item.quantity - item.accepted), 0);
-          const full = center.volunteersSaturated || center.status === "saturated";
+          const saturated = center.status === "saturated";
+          const full = Boolean(center.volunteersSaturated);
+          const goToCenter = (item: VolunteerRequest) => {
+            window.open(routeUrl(center), "_blank", "noreferrer");
+            props.onAccept(item);
+          };
           return (
-            <article className="dc-card" key={center.id} style={{ opacity: full ? 0.72 : 1 }}>
-              <div className="dc-kv" style={{ alignItems: "flex-start", gap: 10 }}>
-                <span style={{ display: "grid", flex: 1, gap: 3, minWidth: 0 }}>
-                  <strong style={{ fontSize: "13.5px", lineHeight: 1.25 }}>{center.name}</strong>
-                  <span className="dc-sub">
-                    {center.city}
-                    {props.position ? ` · ${formatDistance(distanceKm(props.position, center))}` : ""}
-                  </span>
-                  {isApproximate(center) && (
-                    <span className="approx">Ubicación aproximada · confirma la dirección</span>
-                  )}
-                </span>
-                <span className={`dc-tag ${full ? "ok" : missing > 5 ? "urgent" : "warn"}`}>
-                  {full ? "Lleno" : missing > 5 ? "Falta apoyo" : "Casi listo"}
-                </span>
+            <article className={`center-card${saturated ? " sat" : ""}`} key={center.id}>
+              <div className="center-top">
+                <strong>{center.name}</strong>
+                {props.position && <span className="dist">{formatDistance(distanceKm(props.position, center))}</span>}
               </div>
-              <p style={{ color: "#0f172a", fontSize: "12px", fontWeight: 600, lineHeight: 1.35, margin: 0 }}>
-                {first ? `${first.kind} · faltan ${first.quantity - first.accepted} personas` : "Sin cupo de voluntarios hoy"}
-              </p>
-              <div className="dc-row-actions">
-                <button
-                  type="button"
-                  className="dc-solid"
-                  disabled={!first || props.busy}
-                  style={!first ? { background: "#e2e8f0", color: "#94a3b8" } : undefined}
-                  onClick={() => first && props.onAccept(first)}
-                >
-                  {first ? "Me apunto" : "Sin cupo"}
-                </button>
-                <a className="dc-ghost flexnone" style={{ textDecoration: "none" }}
-                   href={routeUrl(center)} target="_blank" rel="noreferrer">Ruta</a>
-              </div>
+              <small>{center.address} · {center.city}</small>
+              {saturated ? (
+                <p className="note warn">Saturado. No te dirijas aquí.</p>
+              ) : full ? (
+                <p className="note">Ya tienen suficientes voluntarios.</p>
+              ) : open.length === 0 ? (
+                <p className="note">Sin solicitudes abiertas ahora mismo, pero acercate para validar.</p>
+              ) : (
+                open.map((item) => (
+                  <div className="request" key={item.id}>
+                    <div>
+                      <strong>{item.kind}</strong>
+                      <small>Faltan {item.quantity - item.accepted} personas</small>
+                    </div>
+                    <button type="button" disabled={props.busy} onClick={() => goToCenter(item)}>Ruta</button>
+                  </div>
+                ))
+              )}
+              {(saturated || full) && (
+                <button type="button" className="route-cta" disabled>Sin cupo</button>
+              )}
             </article>
           );
         })}
       </div>
+        </>
+      )}
     </>
   );
 }
 
-/* Conmutador lista/mapa del selector de centro, con la forma del rediseño. */
+/** Lista o mapa. La lista manda por defecto: pesa nada y funciona con mala señal. */
 function ViewSwitch({
   view,
   onView,
 }: { view: "lista" | "mapa"; onView: (value: "lista" | "mapa") => void }) {
   return (
-    <div className="dc-toggle" style={{ alignSelf: "flex-start" }} role="group" aria-label="Forma de ver los puntos">
-      <button type="button" aria-pressed={view === "lista"} onClick={() => onView("lista")}>Lista</button>
-      <button type="button" aria-pressed={view === "mapa"} onClick={() => onView("mapa")}>Mapa</button>
+    <div className="view-switch" role="group" aria-label="Forma de ver los puntos">
+      <button type="button" aria-pressed={view === "lista"} onClick={() => onView("lista")}>
+        <UiIcon name="reports" size={17} />
+        Lista
+      </button>
+      <button type="button" aria-pressed={view === "mapa"} onClick={() => onView("mapa")}>
+        <UiIcon name="location" size={17} />
+        Mapa
+      </button>
     </div>
   );
 }
@@ -2017,6 +2745,9 @@ function DonorScreen(props: {
   needs: Need[];
   centers: Center[];
   position: Position | null;
+  radiusKm: number | null;
+  onClearRadius: () => void;
+  onExpandRadius: () => void;
   loading: boolean;
   pledge: Commitment | null;
   onInitiatives: () => void;
@@ -2028,14 +2759,44 @@ function DonorScreen(props: {
 
   const byId = useMemo(() => new Map(props.centers.map((center) => [center.id, center])), [props.centers]);
 
+  // El radio solo puede acotar si hay ubicación: sin ella no hay nada que medir.
+  const radiusKm = props.position ? props.radiusKm : null;
+
+  const inRadius = useMemo(() => {
+    if (radiusKm === null || !props.position) return props.needs;
+    const position = props.position;
+    return props.needs.filter((need) => {
+      const center = byId.get(need.centerId);
+      return !!center && distanceKm(position, center) <= radiusKm;
+    });
+  }, [props.needs, byId, radiusKm, props.position]);
+
+  // Si no hay urgentes dentro del radio, se le muestra al donante el más cercano
+  // fuera de él en vez de dejarlo con una lista vacía sin explicación.
+  const urgentOutsideRadius = useMemo(() => {
+    if (radiusKm === null || !props.position) return [];
+    const position = props.position;
+    return props.needs
+      .map((need) => {
+        const center = byId.get(need.centerId);
+        return center ? { need, distance: distanceKm(position, center) } : null;
+      })
+      .filter((row): row is { need: Need; distance: number } => row !== null)
+      .filter((row) => row.need.status === "urgent" && row.distance > radiusKm)
+      .sort((a, b) => a.distance - b.distance);
+  }, [props.needs, byId, radiusKm, props.position]);
+
+  const urgentInRadius = inRadius.some((need) => need.status === "urgent");
+  const showRadiusEmptyState = radiusKm !== null && !urgentInRadius && urgentOutsideRadius.length > 0;
+
   const cities = useMemo(() => {
-    const names = props.needs.map((need) => byId.get(need.centerId)?.city).filter(Boolean) as string[];
+    const names = inRadius.map((need) => byId.get(need.centerId)?.city).filter(Boolean) as string[];
     return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b, "es"));
-  }, [props.needs, byId]);
+  }, [inRadius, byId]);
 
   const shown = useMemo(() => {
     const key = norm(query);
-    const list = props.needs.filter((need) => {
+    const list = inRadius.filter((need) => {
       const center = byId.get(need.centerId);
       if (!center) return false;
       if (onlyUrgent && need.status !== "urgent") return false;
@@ -2055,85 +2816,94 @@ function DonorScreen(props: {
       if (!centerA || !centerB) return 0;
       return distanceKm(position, centerA) - distanceKm(position, centerB);
     });
-  }, [props.needs, byId, query, city, onlyUrgent, props.position]);
+  }, [inRadius, byId, query, city, onlyUrgent, props.position]);
+
+  const initiatives = (
+    <ActionRow
+      icon="reports"
+      title="Iniciativas corporativas para donar"
+      text="Kits en tienda, cuentas y cajeros de empresas"
+      onClick={props.onInitiatives}
+    />
+  );
 
   if (props.loading) return <p className="empty">Sincronizando…</p>;
-
+  if (props.needs.length === 0) {
+    return (
+      <>
+        {props.pledge && <PledgeReminder pledge={props.pledge} />}
+        <p className="empty">
+          Todavía no hay necesidades publicadas. Si atiendes un centro de acopio, publícalas
+          desde el rol correspondiente.
+        </p>
+        <div className="stack">{initiatives}</div>
+      </>
+    );
+  }
   return (
     <>
-      <div className="dc-subhead">
-        <input
-          className="dc-input sm"
-          type="search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Buscar necesidad"
-          aria-label="Buscar qué llevar o a qué centro"
-        />
-        <div className="dc-chips">
-          <button type="button" aria-pressed={onlyUrgent} onClick={() => setOnlyUrgent((current) => !current)}>
-            Solo urgentes
-          </button>
-          <button type="button" aria-pressed={city === ""} onClick={() => setCity("")}>Todas</button>
-          {cities.map((name) => (
-            <button key={name} type="button" aria-pressed={city === name} onClick={() => setCity(name)}>{name}</button>
-          ))}
-        </div>
-      </div>
-
-      <div className="dc-body tight" style={{ padding: "14px 0 24px" }}>
-        {props.pledge && (
-          <div className="dc-live">
-            <i aria-hidden="true" />
-            <span>
-              Tienes {props.pledge.quantity} {props.pledge.unit} de {props.pledge.name} reservados
-              hasta las {new Date(props.pledge.expiresAt).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}
-            </span>
-          </div>
-        )}
-
-        <button type="button" className="dc-tile compact" style={{ minHeight: 0 }} onClick={props.onInitiatives}>
-          <span><UiIcon name="reports" size={16} /></span>
-          <strong>Empresas que donan · kits, cuentas y cajeros</strong>
+      {props.pledge && <PledgeReminder pledge={props.pledge} />}
+      <div className="stack">{initiatives}</div>
+      <SearchBox value={query} onValue={setQuery} label="Buscar qué llevar o a qué centro" icon="package" />
+      <div className="chips scroll">
+        <button
+          type="button"
+          className={`chip${onlyUrgent ? " on" : ""}`}
+          aria-pressed={onlyUrgent}
+          onClick={() => setOnlyUrgent((current) => !current)}
+        >
+          <UiIcon name="alert" size={14} />
+          Solo urgentes
         </button>
-
-        {props.needs.length === 0 && (
-          <p className="empty">Todavía no hay necesidades publicadas.</p>
+        {radiusKm !== null && (
+          <button type="button" className="chip on" onClick={props.onClearRadius}>
+            <UiIcon name="location" size={14} />
+            Centros a menos de {radiusKm} km de ti · Quitar
+          </button>
         )}
-        {props.needs.length > 0 && shown.length === 0 && (
-          <p className="empty">Nada coincide con lo que buscas. Prueba quitando algún filtro.</p>
-        )}
-
+      </div>
+      {showRadiusEmptyState && (
+        <div className="note radius-empty">
+          <span>
+            No hay urgentes en tu zona · hay {urgentOutsideRadius.length}{" "}
+            {urgentOutsideRadius.length === 1 ? "producto urgente" : "productos urgentes"} a{" "}
+            {formatDistance(urgentOutsideRadius[0].distance)}
+          </span>
+          <button type="button" onClick={props.onExpandRadius}>Ampliar radio</button>
+        </div>
+      )}
+      <CityChips cities={cities} value={city} onValue={setCity} />
+      <p className="lead-text">Lo que ves lo pidieron los centros. Lo que ya está cubierto no aparece.</p>
+      {shown.length === 0 && <p className="empty">Nada coincide con lo que buscas. Prueba quitando algún filtro.</p>}
+      <div className="stack">
         {shown.map((need) => {
           const center = byId.get(need.centerId);
           if (!center) return null;
           const promised = need.covered + need.committed;
           const percent = Math.min(100, Math.round((promised / Math.max(1, need.target)) * 100));
-          const urgent = need.status === "urgent";
           return (
-            <button type="button" className="dc-card" key={need.id} onClick={() => props.onPick(need)} style={{ cursor: "pointer", gap: 9, textAlign: "left" }}>
-              <div className="dc-kv" style={{ alignItems: "flex-start", gap: 8, width: "100%" }}>
-                <span style={{ display: "grid", flex: 1, gap: 3, minWidth: 0 }}>
-                  <strong style={{ fontSize: "14px", lineHeight: 1.25 }}>{need.name}</strong>
-                  <span className="dc-sub">
-                    {center.name} · {center.city}
-                    {props.position ? ` · ${formatDistance(distanceKm(props.position, center))}` : ""}
-                  </span>
+            <button type="button" className="need-card" key={need.id} onClick={() => props.onPick(need)}>
+              <div className="need-top">
+                <strong>{need.name}</strong>
+                <span className={`pill ${need.status === "urgent" ? "urgent" : "soft"}`}>
+                  {need.status === "urgent" ? "Urgente" : "Se necesita"}
                 </span>
-                <span className={`dc-tag ${urgent ? "urgent" : "soft"}`}>{urgent ? "Urgente" : "Se necesita"}</span>
               </div>
-              {/* La meta no siempre la puso el centro: cuando la estimamos nosotros hay
-                  que decirlo aquí, que es donde el donante decide cuánto llevar. */}
-              {need.detail && <span className="approx">{need.detail}</span>}
-              <span style={{ display: "grid", gap: 5, width: "100%" }}>
-                <span className="dc-bar" role="img" aria-label={`${percent}% cubierto`}>
-                  <i style={{ background: urgent ? "#dc2626" : "#2563eb", width: `${percent}%` }} />
-                </span>
-                <span className="dc-bar-copy">
-                  <span>{promised} de {need.target} {need.unit}</span>
-                  <span>faltan {remainingOf(need)}</span>
-                </span>
-              </span>
+              <small>{center.name}</small>
+              <div
+                className="progress"
+                role="progressbar"
+                aria-label={`Avance de ${need.name}`}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={percent}
+              >
+                <i style={{ width: `${percent}%` }} />
+              </div>
+              <div className="progress-copy">
+                <span>{promised} de {need.target} {need.unit}</span>
+                {props.position && <span>{formatDistance(distanceKm(props.position, center))}</span>}
+              </div>
             </button>
           );
         })}
@@ -2149,57 +2919,42 @@ function PledgeScreen(props: {
   onQuantity: (value: number) => void;
 }) {
   const remaining = remainingOf(props.need);
-  const promised = props.need.covered + props.need.committed;
-  const percent = Math.min(100, Math.round((promised / Math.max(1, props.need.target)) * 100));
-  const urgent = props.need.status === "urgent";
   return (
-    <div className="dc-body">
-      <section className="dc-card">
-        <div className="dc-kv" style={{ alignItems: "center" }}>
-          <strong className="dc-h lg">{props.need.name}</strong>
-          <span className={`dc-tag ${urgent ? "urgent" : "soft"}`}>{urgent ? "Urgente hoy" : "Se necesita"}</span>
-        </div>
-        <div className="dc-bar"><i style={{ background: urgent ? "#dc2626" : "#2563eb", width: `${percent}%` }} /></div>
-        <span style={{ color: "#64748b", fontSize: "11.5px", fontWeight: 600 }}>
-          {promised} de {props.need.target} {props.need.unit} · faltan {remaining}
-        </span>
-        {props.need.detail && (
-          <span className="approx" style={{ marginTop: 6 }}>{props.need.detail}</span>
+    <>
+      <section className="detail-card">
+        <h2>{props.need.name}</h2>
+        {props.need.detail && <p>{props.need.detail}</p>}
+        {props.center && (
+          <>
+            <span className="eyebrow">Entregar en</span>
+            <strong>{props.center.name}</strong>
+            <small>{props.center.address} · {props.center.city}</small>
+            {props.center.hours && <small>Horario: {props.center.hours}</small>}
+          </>
         )}
       </section>
-
-      {props.center && (
-        <section className="dc-card">
-          <span className="dc-eyebrow">Entrega en</span>
-          <strong className="dc-h" style={{ fontSize: "13.5px", lineHeight: 1.3 }}>{props.center.name}</strong>
-          <span className="dc-sub" style={{ fontSize: "12px", lineHeight: 1.45 }}>
-            {props.center.address}, {props.center.city}
-            {props.center.hours ? <><br />{props.center.hours}</> : null}
-          </span>
-          <a className="dc-ghost" style={{ display: "block", textAlign: "center", textDecoration: "none" }}
-             href={routeUrl(props.center)} target="_blank" rel="noreferrer">Ver ruta en Maps</a>
-        </section>
-      )}
-
-      <section className="dc-card">
-        <div className="dc-kv" style={{ alignItems: "baseline" }}>
-          <strong className="dc-h" style={{ fontSize: "13px" }}>¿Cuánto vas a llevar?</strong>
-          <span style={{ color: "#94a3b8", fontSize: "11px", fontWeight: 500 }}>máx {remaining}</span>
+      <section className="stepper-card">
+        <span>¿Cuánto puedes llevar?</span>
+        <div className="stepper">
+          <button type="button" aria-label="Reducir cantidad" onClick={() => props.onQuantity(Math.max(1, props.quantity - 1))}>
+            <UiIcon name="minus" size={20} />
+          </button>
+          <strong aria-live="polite">{props.quantity}</strong>
+          <button type="button" aria-label="Aumentar cantidad" onClick={() => props.onQuantity(Math.min(Math.max(1, remaining), props.quantity + 1))}>
+            <UiIcon name="plus" size={20} />
+          </button>
         </div>
-        <div className="dc-step">
-          <button type="button" aria-label="Reducir cantidad" onClick={() => props.onQuantity(Math.max(1, props.quantity - 1))}>−</button>
-          <span className="dc-step-val">
-            <strong style={{ fontSize: "30px", fontWeight: 700 }} aria-live="polite">{props.quantity}</strong>
-            <small>{props.need.unit}</small>
-          </span>
-          <button type="button" className="plus" aria-label="Aumentar cantidad" onClick={() => props.onQuantity(Math.min(Math.max(1, remaining), props.quantity + 1))}>+</button>
-        </div>
+        <small>{props.need.unit} · faltan {remaining}</small>
       </section>
-
-      <p className="dc-note warn">
-        Tu compromiso reserva el cupo por 6 horas. Si no llegas, vuelve a quedar disponible para otra persona.
+      <p className="note">
+        Tu compromiso reserva el cupo por 6 horas. Si no llegas, se libera automáticamente para otro donante.
       </p>
-    </div>
+      {props.center && (
+        <a className="route" href={routeUrl(props.center)} target="_blank" rel="noreferrer">
+          Ver ruta <UiIcon name="external" size={15} />
+        </a>
+      )}
+    </>
   );
 }
 
@@ -2217,44 +2972,23 @@ function DoneScreen({
   body,
   note,
   route,
-  onHome,
-}: { kind: DoneKind; body: string; note: string; route: RouteHint | null; onHome: () => void }) {
-  // El diseño separa referencia y hora límite en filas propias: son los dos datos
-  // que alguien vuelve a mirar después, y en un párrafo se pierden.
-  const reference = /[A-Z0-9]{6,}/.exec(note)?.[0] ?? "";
-  const deadline = /\d{1,2}:\d{2}( ?[ap]\.? ?m\.?)?/i.exec(note)?.[0] ?? "";
+}: { kind: DoneKind; body: string; note: string; route: RouteHint | null }) {
   return (
-    <section className="dc-done">
-      <span className="tick" aria-hidden="true"><UiIcon name="check" size={28} /></span>
-      <div style={{ display: "grid", gap: 8 }}>
-        <h2>{DONE_TITLES[kind]}</h2>
-        <p>{body}</p>
-      </div>
-
-      {(reference || deadline) && (
-        <div className="dc-card">
-          {reference && (
-            <div className="dc-kv"><span>Referencia</span><strong>{reference}</strong></div>
-          )}
-          {reference && deadline && <div className="dc-hr" />}
-          {deadline && (
-            <div className="dc-kv"><span>Hora límite</span><strong className="warn">{deadline}</strong></div>
-          )}
-        </div>
-      )}
-      {!reference && !deadline && note && <p className="dc-sub" style={{ margin: 0 }}>{note}</p>}
-
+    <section className="done">
+      <span className="mark ok" aria-hidden="true"><UiIcon name="check" size={30} /></span>
+      <h2>{DONE_TITLES[kind]}</h2>
+      <p>{body}</p>
+      {note && <p className="fineprint">{note}</p>}
       {route && (
-        <div className="dc-card" style={{ gap: 8 }}>
-          <span className="dc-eyebrow">Dónde</span>
-          <strong className="dc-h" style={{ fontSize: "13px", lineHeight: 1.25 }}>{route.name}</strong>
-          <span className="dc-sub">{route.address}</span>
-          <a className="dc-ghost" style={{ display: "block", textAlign: "center", textDecoration: "none" }}
-             href={route.url} target="_blank" rel="noreferrer">Abrir ruta</a>
-        </div>
+        <section className="detail-card">
+          <span className="eyebrow">Dónde</span>
+          <strong>{route.name}</strong>
+          <small>{route.address}</small>
+          <a className="route" href={route.url} target="_blank" rel="noreferrer">
+            Abrir ruta <UiIcon name="external" size={15} />
+          </a>
+        </section>
       )}
-
-      <button type="button" className="dc-linkbtn" onClick={onHome}>Volver al inicio</button>
     </section>
   );
 }

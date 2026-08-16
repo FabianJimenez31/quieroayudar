@@ -5,6 +5,9 @@
 
 export type Level = "urgent" | "normal" | "blocked";
 
+/** Emergencia a la que sirve un centro. "terremoto" es la causa por defecto. */
+export type Cause = "terremoto" | "tolima";
+
 export type Center = {
   id: string;
   name: string;
@@ -21,6 +24,7 @@ export type Center = {
   volunteersSaturated?: boolean;
   /** "approximate" = solo tenemos la dirección; el pin es del barrio o de la calle. */
   locationPrecision?: "exact" | "approximate";
+  cause?: Cause;
 };
 
 export type Need = {
