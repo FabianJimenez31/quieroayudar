@@ -1981,27 +1981,6 @@ function CenterHome(props: {
         <div><strong>{hands}</strong><small>manos solicitadas</small></div>
       </section>
 
-      <section className="place-card">
-        <label>
-          <span>Causa a la que apoya este centro</span>
-          <div className="cause-switch" role="radiogroup" aria-label="Causa del centro">
-            {CAUSES.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                role="radio"
-                aria-checked={causeOf(center) === item.id}
-                className={`cause-option${causeOf(center) === item.id ? " on" : ""} cause-${item.id}`}
-                onClick={() => props.onCause(item.id)}
-              >
-                <UiIcon name={item.id === "tolima" ? "flame" : "alert"} size={18} />
-                {item.short}
-              </button>
-            ))}
-          </div>
-        </label>
-      </section>
-
       <section className="switch-card">
         <div>
           <strong>Se aceptan donaciones</strong>
@@ -2057,6 +2036,27 @@ function CenterHome(props: {
         <ActionRow icon="users" title="Solicitar manos" text="Tarea y número de personas" onClick={props.onHands} />
         <ActionRow icon="building" title="Cambiar de centro" text="Elegir otro acopio en este dispositivo" onClick={props.onChangeCenter} />
       </div>
+
+      <section className="place-card">
+        <label>
+          <span>Causa a la que apoya este centro</span>
+          <div className="cause-switch" role="radiogroup" aria-label="Causa del centro">
+            {CAUSES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="radio"
+                aria-checked={causeOf(center) === item.id}
+                className={`cause-option${causeOf(center) === item.id ? " on" : ""} cause-${item.id}`}
+                onClick={() => props.onCause(item.id)}
+              >
+                <UiIcon name={item.id === "tolima" ? "flame" : "alert"} size={18} />
+                {item.short}
+              </button>
+            ))}
+          </div>
+        </label>
+      </section>
 
       {inbox.length > 0 && (
         <section className="feed">
