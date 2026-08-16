@@ -1,0 +1,15 @@
+[Unit]
+Description=Despliegue continuo de quieroayudar.co desde la rama main
+Documentation=https://github.com/FabianJimenez31/quieroayudar
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/puedoayudar.co
+Environment=HOME=/root
+ExecStart=/opt/puedoayudar.co/scripts/deploy.sh
+# La construcción de la PWA puede tardar varios minutos.
+TimeoutStartSec=1800
+Nice=10

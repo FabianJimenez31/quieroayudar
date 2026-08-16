@@ -31,6 +31,26 @@ docker compose logs --tail=100 api
 docker compose up -d --build
 ```
 
+## Despliegue continuo
+
+Lo que entra a `main` se publica solo. Un timer de systemd consulta el repositorio cada minuto y, si hay algo nuevo, `scripts/deploy.sh` actualiza el código, corre las pruebas de la API, reconstruye los contenedores y comprueba que `/health` y la PWA respondan. Si algo falla, vuelve al commit anterior y lo reconstruye; el commit roto queda marcado para no reintentarlo en bucle, hasta que llegue un arreglo a `main` o se fuerce a mano.
+
+El servidor también se usa para desarrollar, así que el despliegue se omite si el checkout está en otra rama o tiene cambios sin confirmar: nunca pisa trabajo en curso.
+
+```bash
+# instalación (una sola vez)
+sudo install -m 644 deploy/quieroayudar-deploy.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now quieroayudar-deploy.timer
+
+# operación
+systemctl list-timers quieroayudar-deploy.timer     # cuándo corre la próxima vez
+journalctl -u quieroayudar-deploy -f                # qué hizo el último despliegue
+sudo ./scripts/deploy.sh --force                    # desplegar ahora, sin esperar
+sudo systemctl disable --now quieroayudar-deploy.timer   # pausar el despliegue automático
+```
+
+Los valores por defecto (rama, URLs de salud, reintentos, si corren las pruebas) se ajustan en `/etc/default/quieroayudar-deploy`, fuera del repositorio.
+
 ## Respaldos
 
 Los respaldos corren a diario por cron, se guardan con permisos privados y se retienen 14 días. El directorio de respaldos está fuera del repositorio.
