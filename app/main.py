@@ -25,17 +25,23 @@ settings = get_settings()
 def migrate_centers_provenance() -> None:
     """Keep the self-hosted schema compatible without a migration service."""
     columns = {column["name"] for column in inspect(engine).get_columns("centers")}
-    statements = {
-        "source_name": "ALTER TABLE centers ADD COLUMN source_name VARCHAR(120) NOT NULL DEFAULT '' AFTER hours",
-        "source_url": "ALTER TABLE centers ADD COLUMN source_url VARCHAR(500) NOT NULL DEFAULT '' AFTER source_name",
-        "verified_at": "ALTER TABLE centers ADD COLUMN verified_at DATETIME NULL AFTER source_url",
-        "volunteers_saturated": "ALTER TABLE centers ADD COLUMN volunteers_saturated TINYINT(1) NOT NULL DEFAULT 0 AFTER status",
-        "location_precision": "ALTER TABLE centers ADD COLUMN location_precision VARCHAR(12) NOT NULL DEFAULT 'exact' AFTER longitude",
+    # "AFTER x" solo lo entiende MySQL: SQLite (el dev local) no soporta posicionar la
+    # columna y truena con un error de sintaxis si se lo mandamos.
+    is_mysql = engine.dialect.name == "mysql"
+    definitions = {
+        "source_name": ("VARCHAR(120) NOT NULL DEFAULT ''", "hours"),
+        "source_url": ("VARCHAR(500) NOT NULL DEFAULT ''", "source_name"),
+        "verified_at": ("DATETIME NULL", "source_url"),
+        "volunteers_saturated": ("TINYINT(1) NOT NULL DEFAULT 0", "status"),
+        "location_precision": ("VARCHAR(12) NOT NULL DEFAULT 'exact'", "longitude"),
+        "cause": ("VARCHAR(20) NOT NULL DEFAULT 'terremoto'", "volunteers_saturated"),
     }
     with engine.begin() as connection:
-        for column, statement in statements.items():
-            if column not in columns:
-                connection.execute(text(statement))
+        for column, (definition, after) in definitions.items():
+            if column in columns:
+                continue
+            suffix = f" AFTER {after}" if is_mysql else ""
+            connection.execute(text(f"ALTER TABLE centers ADD COLUMN {column} {definition}{suffix}"))
 
 
 @asynccontextmanager
@@ -250,6 +256,7 @@ def post_network(payload: ActionPayload, db: Session = Depends(get_db)):
 @app.get("/v1/centers")
 def get_centers(
     city: str = Query(default="", max_length=80),
+    cause: str = Query(default="", max_length=20),
     all_records: bool = Query(default=False, alias="all"),
     db: Session = Depends(get_db),
 ):
@@ -258,6 +265,8 @@ def get_centers(
         query = query.where(Center.status != "closed")
     if city.strip():
         query = query.where(Center.city == city.strip()[:80])
+    if cause.strip():
+        query = query.where(Center.cause == cause.strip()[:20])
     rows = list(db.scalars(query.order_by(Center.updated_at.desc(), Center.city.asc(), Center.name.asc())))
     return {"centers": [center_json(row) for row in rows]}
 
@@ -280,6 +289,7 @@ def create_center(
         verified_at=utcnow() if payload.sourceUrl else None,
         location_precision=payload.locationPrecision,
         status="active",
+        cause=payload.cause,
     )
     db.add(center)
     db.commit()
@@ -299,7 +309,7 @@ def update_center(
     center = db.scalar(select(Center).where(Center.id == payload.id).with_for_update())
     if not center:
         return JSONResponse({"error": "Centro no encontrado."}, status_code=404)
-    if payload.status is None and payload.volunteersSaturated is None:
+    if payload.status is None and payload.volunteersSaturated is None and payload.cause is None:
         return JSONResponse({"error": "Nada que actualizar."}, status_code=400)
     # Reabrir un centro cerrado también es cosa de coordinación.
     if center.status == "closed" and payload.status is not None and payload.status != "closed":
@@ -308,6 +318,8 @@ def update_center(
         center.status = payload.status
     if payload.volunteersSaturated is not None:
         center.volunteers_saturated = payload.volunteersSaturated
+    if payload.cause is not None:
+        center.cause = payload.cause
     center.updated_at = utcnow()
     db.commit()
     return {"center": center_json(center)}

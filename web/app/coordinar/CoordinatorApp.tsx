@@ -33,6 +33,7 @@ type Center = {
   contact: string;
   hours: string;
   status: "active" | "saturated" | "closed";
+  cause?: Cause;
   createdAt?: string;
 };
 type Need = {
@@ -69,9 +70,16 @@ type Report = {
 };
 type Data = { centers: Center[]; needs: Need[]; volunteerRequests: VolunteerRequest[]; reports: Report[] };
 type Position = { latitude: number; longitude: number };
-type CenterDraft = { name: string; city: string; address: string; contact: string; hours: string; latitude: string; longitude: string };
+type Cause = "terremoto" | "tolima";
+type CenterDraft = { name: string; city: string; address: string; contact: string; hours: string; latitude: string; longitude: string; cause: Cause };
 
-const BLANK_CENTER: CenterDraft = { name: "", city: "", address: "", contact: "", hours: "", latitude: "", longitude: "" };
+const BLANK_CENTER: CenterDraft = { name: "", city: "", address: "", contact: "", hours: "", latitude: "", longitude: "", cause: "terremoto" };
+
+/** Las dos emergencias activas hoy. "terremoto" es la causa por defecto. */
+const CAUSES: { id: Cause; label: string }[] = [
+  { id: "terremoto", label: "Terremoto" },
+  { id: "tolima", label: "Incendios Tolima" },
+];
 
 type Screen =
   | "inicio"
@@ -374,6 +382,7 @@ export default function CoordinatorApp() {
         hours: centerDraft.hours.trim(),
         latitude: Number(centerDraft.latitude),
         longitude: Number(centerDraft.longitude),
+        cause: centerDraft.cause,
       },
       "Centro publicado. Ya aparece en el mapa.",
       () => setTrail(["inicio"]),
@@ -971,6 +980,23 @@ function CenterDataStep(props: { draft: CenterDraft; onDraft: Dispatch<SetStateA
   return (
     <>
       <section className="place-card">
+        <label>
+          <span>Causa a la que apoya</span>
+          <div className="chips" role="radiogroup" aria-label="Causa del centro">
+            {CAUSES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="radio"
+                aria-checked={props.draft.cause === item.id}
+                className={`chip${props.draft.cause === item.id ? " on" : ""}`}
+                onClick={() => set((current) => ({ ...current, cause: item.id }))}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </label>
         <label>
           <span>Nombre del centro</span>
           <input

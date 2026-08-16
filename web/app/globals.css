@@ -464,6 +464,14 @@ select,input,textarea { font-size:16px; }
 .roles-head { align-items:center; display:flex; justify-content:space-between; }
 .howto-pill { border:0; cursor:pointer; }
 
+.cause-switch { display:grid; gap:8px; grid-template-columns:1fr 1fr; margin-top:14px; }
+.cause-option { align-items:center; background:#fff; border:1px solid #e6e8ec; border-radius:14px; color:#495868; cursor:pointer; display:flex; font-size:12px; font-weight:700; gap:7px; justify-content:center; min-height:48px; padding:0 10px; text-align:center; }
+.cause-option.on.cause-terremoto { background:#edf4ff; border-color:var(--blue); color:#083f93; }
+.cause-option.on.cause-tolima { background:#fff1ee; border-color:var(--coral); color:#9a332b; }
+
+.bulk-cause { display:grid; gap:6px; margin:14px 0; }
+.bulk-cause>span { color:#595c68; font-size:12px; font-weight:600; }
+
 .howto-card { background:#fff; border:1px solid #f1f2f3; border-radius:18px; display:grid; gap:10px; padding:16px; }
 .howto-card strong { font-size:14px; }
 .howto-card p { color:#667f96; font-size:12px; line-height:1.5; margin:0; }

@@ -38,6 +38,8 @@ export default function BulkCenters({
   const [pasted, setPasted] = useState("");
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
+  // Se aplica a toda la tanda: quien sube un listado lo hace para una sola emergencia a la vez.
+  const [cause, setCause] = useState<"terremoto" | "tolima">("terremoto");
   const fileInput = useRef<HTMLInputElement>(null);
 
   const ready = items.filter((item) => item.errors.length === 0 && !excluded.includes(item.line));
@@ -148,6 +150,7 @@ export default function BulkCenters({
               hours: item.hours,
               sourceName: item.sourceName,
               sourceUrl: item.sourceUrl,
+              cause,
             }),
           });
           const body = (await response.json().catch(() => ({}))) as { error?: string };
@@ -191,6 +194,25 @@ export default function BulkCenters({
           <UiIcon name="download" size={16} /> Descargar plantilla
         </button>
       </header>
+
+      <label className="bulk-cause">
+        <span>Causa de esta tanda</span>
+        <div className="chips" role="radiogroup" aria-label="Causa de la tanda">
+          {(["terremoto", "tolima"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              role="radio"
+              aria-checked={cause === option}
+              className={`chip${cause === option ? " on" : ""}`}
+              disabled={busy}
+              onClick={() => setCause(option)}
+            >
+              {option === "tolima" ? "Incendios Tolima" : "Terremoto"}
+            </button>
+          ))}
+        </div>
+      </label>
 
       <div className="bulk-sources">
         <label className="bulk-file">

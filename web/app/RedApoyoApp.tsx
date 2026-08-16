@@ -8,7 +8,9 @@ import HoaxesScreen from "./HoaxesScreen";
 import InitiativesScreen from "./InitiativesScreen";
 import { distanceKm, formatDistance, routeUrl } from "./geo";
 import { parseCoordinates } from "./coordinar/centersImport";
+import { drawNeedsShareImage } from "./coordinar/shareImage";
 import type {
+  Cause,
   Center,
   FieldReport,
   Level,
@@ -65,6 +67,7 @@ type NewCenterDraft = {
   hours: string;
   latitude: string;
   longitude: string;
+  cause: Cause;
 };
 
 const BLANK_NEW_CENTER: NewCenterDraft = {
@@ -75,6 +78,7 @@ const BLANK_NEW_CENTER: NewCenterDraft = {
   hours: "",
   latitude: "",
   longitude: "",
+  cause: "terremoto",
 };
 
 const EMPTY: Network = { centers: [], needs: [], volunteerRequests: [], reports: [] };
@@ -111,6 +115,16 @@ const SCREEN_BY_QUERY = new Map(
 );
 
 const ROLE_SCREENS: Role[] = ["afectado", "acopio", "logistica", "donante"];
+
+/** Las dos emergencias activas hoy. "terremoto" es la causa por defecto. */
+const CAUSES: { id: Cause; label: string; short: string }[] = [
+  { id: "terremoto", label: "Terremoto", short: "Terremoto" },
+  { id: "tolima", label: "Incendios en el Tolima", short: "Tolima" },
+];
+
+function causeOf(center: Center): Cause {
+  return center.cause ?? "terremoto";
+}
 
 function urlForScreen(next: Screen) {
   const query = SCREEN_QUERY[next];
@@ -310,6 +324,9 @@ export default function RedApoyoApp() {
   const [screen, setScreen] = useState<Screen>("roles");
   const [role, setRole] = useState<Role | null>(null);
   const [myCenterId, setMyCenterId] = useState("");
+  // Qué emergencia se está mirando: filtra los centros que se muestran en toda la app.
+  // "terremoto" es la causa por defecto.
+  const [cause, setCause] = useState<Cause>("terremoto");
   const [newCenter, setNewCenter] = useState<NewCenterDraft>(BLANK_NEW_CENTER);
   const [network, setNetwork] = useState<Network>(EMPTY);
   const [loading, setLoading] = useState(true);
@@ -343,6 +360,7 @@ export default function RedApoyoApp() {
   const [doneNote, setDoneNote] = useState("");
   const [doneRoute, setDoneRoute] = useState<RouteHint | null>(null);
   const [pledge, setPledge] = useState<Commitment | null>(null);
+  const [sharing, setSharing] = useState(false);
 
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -397,6 +415,8 @@ export default function RedApoyoApp() {
     const savedCity = window.localStorage.getItem("ra.city") ?? "";
     if (savedCity) setCity(savedCity);
     if (savedCenter) setMyCenterId(savedCenter);
+    const savedCause = window.localStorage.getItem("ra.cause");
+    if (savedCause && CAUSES.some((item) => item.id === savedCause)) setCause(savedCause as Cause);
 
     const savedPledge = window.localStorage.getItem("ra.pledge");
     if (savedPledge) {
@@ -493,7 +513,8 @@ export default function RedApoyoApp() {
   }
 
   function openNewCenter() {
-    setNewCenter(BLANK_NEW_CENTER);
+    // Parte de la causa que se está mirando en el inicio; se puede cambiar en el formulario.
+    setNewCenter({ ...BLANK_NEW_CENTER, cause });
     navigate("centro-nuevo");
   }
 
@@ -521,11 +542,14 @@ export default function RedApoyoApp() {
       hours: newCenter.hours.trim(),
       latitude,
       longitude,
+      cause: newCenter.cause,
     });
     if (!result.ok) return;
     const created = result.data.center as Center | undefined;
     if (!created) return;
     setNetwork((current) => ({ ...current, centers: [created, ...current.centers] }));
+    // Si se creó para la otra causa, cámbiate a esa vista para que el centro nuevo se vea de inmediato.
+    if (newCenter.cause !== cause) updateCause(newCenter.cause);
     chooseCenter(created.id);
     setNewCenter(BLANK_NEW_CENTER);
     flash("Centro publicado. Ya aparece en el mapa.");
@@ -535,6 +559,11 @@ export default function RedApoyoApp() {
   function updateCity(value: string) {
     setCity(value);
     window.localStorage.setItem("ra.city", value);
+  }
+
+  function updateCause(value: Cause) {
+    setCause(value);
+    window.localStorage.setItem("ra.cause", value);
   }
 
   const myCenter = useMemo(
@@ -549,7 +578,31 @@ export default function RedApoyoApp() {
     [network.needs, myCenter],
   );
 
-  const pulse = useMemo(() => buildPulse(network, position), [network, position]);
+  // Todo lo que se explora (mapa, listas, metas) se acota a la causa elegida en el
+  // inicio. El centro propio (myCenter/myNeeds, arriba) no se filtra: quien ya
+  // coordina un punto no puede perderlo de vista por cambiar de pestaña de causa.
+  const visibleCenters = useMemo(
+    () => network.centers.filter((center) => causeOf(center) === cause),
+    [network.centers, cause],
+  );
+  const visibleCenterIds = useMemo(() => new Set(visibleCenters.map((center) => center.id)), [visibleCenters]);
+  const visibleNeeds = useMemo(
+    () => network.needs.filter((need) => visibleCenterIds.has(need.centerId)),
+    [network.needs, visibleCenterIds],
+  );
+  const visibleVolunteerRequests = useMemo(
+    () => network.volunteerRequests.filter((request) => visibleCenterIds.has(request.centerId)),
+    [network.volunteerRequests, visibleCenterIds],
+  );
+
+  const pulse = useMemo(
+    () =>
+      buildPulse(
+        { centers: visibleCenters, needs: visibleNeeds, volunteerRequests: visibleVolunteerRequests, reports: network.reports },
+        position,
+      ),
+    [visibleCenters, visibleNeeds, visibleVolunteerRequests, network.reports, position],
+  );
 
   /**
    * Abre la lista de productos partiendo de lo ya publicado. Solo se reconstruye si
@@ -813,26 +866,68 @@ export default function RedApoyoApp() {
     return result.ok;
   }
 
+  /**
+   * Se publica solo al reabrir: la red no tiene push, así que este reporte en el
+   * feed es lo único que avisa a donantes y voluntarios que vuelven a hacer falta.
+   */
+  async function notifyReopened(category: "saturation" | "hands", detail: string) {
+    if (!myCenter) return;
+    await send("/api/network", "POST", {
+      action: "report",
+      category,
+      city: myCenter.city,
+      location: myCenter.name,
+      details: detail,
+    });
+    void sync();
+  }
+
+  async function setDonationsAccepting(accepting: boolean) {
+    if (!myCenter) return;
+    const name = myCenter.name;
+    if (!(await setCenterSaturated(!accepting))) return;
+    if (accepting) {
+      flash("Avisamos a la red que vuelves a recibir donaciones.");
+      void notifyReopened("saturation", `${name} vuelve a aceptar donaciones.`);
+    } else {
+      flash("Dejas de aparecer como destino sugerido.");
+    }
+  }
+
+  /** Cambia a qué emergencia sirve el propio centro. Puede ir en los dos sentidos. */
+  async function setCenterCause(next: Cause) {
+    if (!myCenter || myCenter.cause === next) return;
+    const previous = causeOf(myCenter);
+    patchMyCenter({ cause: next });
+    const result = await send("/api/centers", "PATCH", { id: myCenter.id, cause: next });
+    if (result.ok) {
+      // Se sigue viendo el propio centro sin importar qué causa se esté explorando en el inicio.
+      updateCause(next);
+      void sync();
+      flash(`Este centro ahora aparece en ${CAUSES.find((item) => item.id === next)?.short ?? next}.`);
+    } else {
+      patchMyCenter({ cause: previous });
+    }
+  }
+
+  async function setVolunteersAccepting(accepting: boolean) {
+    if (!myCenter) return;
+    const name = myCenter.name;
+    const saturated = !accepting;
+    patchMyCenter({ volunteersSaturated: saturated });
+    const result = await send("/api/centers", "PATCH", { id: myCenter.id, volunteersSaturated: saturated });
+    void sync();
+    if (!result.ok) { patchMyCenter({ volunteersSaturated: !saturated }); return; }
+    if (accepting) {
+      flash("Avisamos a la red que vuelves a aceptar voluntarios.");
+      void notifyReopened("hands", `${name} vuelve a aceptar voluntarios.`);
+    } else {
+      flash("Los voluntarios nuevos verán otros centros primero.");
+    }
+  }
+
   async function submitSaturation() {
     const option = SATURATION_OPTIONS.find((item) => item.id === saturationReason) ?? SATURATION_OPTIONS[0];
-    if (role === "acopio") {
-      if (!myCenter) { flash("Elige primero tu centro de acopio."); return; }
-      if (!(await setCenterSaturated(true))) return;
-      // El motivo también se publica: sin esto, logística ve un centro cerrado sin saber por qué.
-      await send("/api/network", "POST", {
-        action: "report",
-        category: "saturation",
-        city: myCenter.city,
-        location: myCenter.name,
-        details: `Punto saturado: ${option.id}. ${option.detail}.`,
-      });
-      finish(
-        "saturado",
-        `${myCenter.name} dejó de aparecer como destino sugerido. Motivo: ${option.id.toLowerCase()}.`,
-        "Quítalo desde el interruptor del inicio cuando baje la afluencia.",
-      );
-      return;
-    }
     if (missingCity()) return;
     const result = await send("/api/network", "POST", {
       action: "report",
@@ -906,16 +1001,68 @@ export default function RedApoyoApp() {
     }));
   }
 
-  async function toggleVolunteers() {
+  /**
+   * Genera la tarjeta de necesidades del centro y abre el share-sheet nativo
+   * (Instagram aparece ahí si está instalada). Sin share-sheet, descarga el
+   * PNG para subirlo a mano.
+   */
+  async function shareCenterNeeds() {
     if (!myCenter) return;
-    const next = !myCenter.volunteersSaturated;
-    patchMyCenter({ volunteersSaturated: next });
-    flash(next ? "Los voluntarios nuevos verán otros centros." : "Vuelves a aparecer para voluntarios.");
-    const result = await send("/api/centers", "PATCH", { id: myCenter.id, volunteersSaturated: next });
-    // Éxito o error, la red manda: al sincronizar se confirma o se deshace.
-    void sync();
-    if (!result.ok) patchMyCenter({ volunteersSaturated: !next });
+    const items = myNeeds
+      .filter((need) => need.status !== "blocked")
+      .map((need) => ({
+        name: need.name,
+        unit: need.unit,
+        remaining: Math.max(0, need.target - need.covered - need.committed),
+        urgent: need.status === "urgent",
+      }))
+      .filter((need) => need.remaining > 0)
+      .sort((a, b) => Number(b.urgent) - Number(a.urgent));
+
+    if (items.length === 0) {
+      flash("Todavía no tienes productos pendientes por compartir.");
+      return;
+    }
+
+    setSharing(true);
+    try {
+      await document.fonts.ready;
+      const canvas = document.createElement("canvas");
+      drawNeedsShareImage(canvas, myCenter, items);
+
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!blob) throw new Error("No pudimos generar la imagen.");
+
+      const file = new File([blob], `necesidades-${norm(myCenter.name).replace(/\s+/g, "-")}.png`, { type: "image/png" });
+      const shareData: ShareData = {
+        files: [file],
+        title: "Necesitamos tu ayuda",
+        text: `${myCenter.name} está pidiendo apoyo. Dona o entrega en quieroayudar.co`,
+      };
+
+      if (navigator.canShare?.(shareData)) {
+        try {
+          await navigator.share(shareData);
+          return;
+        } catch (caught) {
+          if (caught instanceof Error && caught.name === "AbortError") return;
+        }
+      }
+
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = file.name;
+      link.click();
+      URL.revokeObjectURL(url);
+      flash("Imagen descargada. Súbela a Instagram desde tu galería.");
+    } catch (caught) {
+      flash(caught instanceof Error ? caught.message : "No pudimos generar la imagen.");
+    } finally {
+      setSharing(false);
+    }
   }
+
   /* ───────── Navegación ───────── */
 
   const home: Screen = role ?? "roles";
@@ -938,11 +1085,11 @@ export default function RedApoyoApp() {
     productos: ["Productos", role === "acopio" ? "Marca estado y meta" : "Marca el estado de cada uno"],
     recibido: ["Registrar lo que llegó", myCenter?.name ?? "Elige tu centro"],
     manos: ["Solicitar manos", "Se avisa a voluntarios cercanos"],
-    saturado: ["Marcar saturación", role === "acopio" ? myCenter?.name ?? "Elige tu centro" : city || "Zona afectada"],
+    saturado: ["Marcar saturación", city || "Zona afectada"],
     personas: ["Persona encontrada", "Atención de emergencias"],
     logistica: [
       "¿Dónde hago falta?",
-      `${network.centers.filter((item) => item.status === "active").length} centros activos`,
+      `${visibleCenters.filter((item) => item.status === "active").length} centros activos`,
     ],
     donante: ["Se necesita ahora", "Priorizado por los centros"],
     donar: ["Comprometer donación", "Reserva por 6 horas"],
@@ -958,7 +1105,7 @@ export default function RedApoyoApp() {
     recibido: myNeeds.length > 0 ? "Registrar entrega" : undefined,
     manos: "Enviar solicitud",
     "centro-nuevo": "Publicar centro",
-    saturado: role === "acopio" ? "Marcar mi centro como saturado" : "Publicar alerta",
+    saturado: "Publicar alerta",
     // Sin necesidad no hay nada que comprometer: un botón inerte es peor que ninguno.
     donar: pledgeNeed ? "Comprometer donación" : undefined,
     done: "Volver al inicio",
@@ -1002,18 +1149,18 @@ export default function RedApoyoApp() {
   /* ───────── Datos derivados ───────── */
 
   const activeNeeds = useMemo(() => {
-    const byId = new Map(network.centers.map((center) => [center.id, center]));
-    return network.needs.filter(
+    const byId = new Map(visibleCenters.map((center) => [center.id, center]));
+    return visibleNeeds.filter(
       (need) => need.status !== "blocked" && byId.get(need.centerId)?.status === "active" && remainingOf(need) > 0,
     );
-  }, [network]);
+  }, [visibleCenters, visibleNeeds]);
 
   const sortedCenters = useMemo(() => {
     // Primero los que reciben ayuda, luego los que ya tienen bastantes voluntarios,
     // y al final los saturados. Dentro de cada grupo manda la cercanía.
     const rank = (center: Center) =>
       center.status === "saturated" ? 2 : center.volunteersSaturated ? 1 : 0;
-    const list = [...network.centers];
+    const list = [...visibleCenters];
     list.sort((a, b) => {
       const byRank = rank(a) - rank(b);
       if (byRank !== 0) return byRank;
@@ -1022,17 +1169,17 @@ export default function RedApoyoApp() {
         if (byDistance !== 0) return byDistance;
       }
       const byNeed =
-        urgencyScore(b, network.needs, network.volunteerRequests) -
-        urgencyScore(a, network.needs, network.volunteerRequests);
+        urgencyScore(b, visibleNeeds, visibleVolunteerRequests) -
+        urgencyScore(a, visibleNeeds, visibleVolunteerRequests);
       if (byNeed !== 0) return byNeed;
       return a.name.localeCompare(b.name, "es");
     });
     return list;
-  }, [network, position]);
+  }, [visibleCenters, visibleNeeds, visibleVolunteerRequests, position]);
 
   const knownCities = useMemo(
-    () => Array.from(new Set(network.centers.map((center) => center.city))).sort((a, b) => a.localeCompare(b, "es")),
-    [network.centers],
+    () => Array.from(new Set(visibleCenters.map((center) => center.city))).sort((a, b) => a.localeCompare(b, "es")),
+    [visibleCenters],
   );
 
   /* ───────── Render ───────── */
@@ -1076,6 +1223,8 @@ export default function RedApoyoApp() {
             pulse={pulse}
             position={position}
             role={role}
+            cause={cause}
+            onCause={updateCause}
             onPick={chooseRole}
             onAyuda={() => navigate("ayuda-rol")}
             onTutorial={() => navigate("tutorial")}
@@ -1134,9 +1283,11 @@ export default function RedApoyoApp() {
             onProducts={openProducts}
             onReceived={openReceived}
             onHands={() => navigate("manos")}
-            onSaturation={() => navigate("saturado")}
-            onToggleVolunteers={() => void toggleVolunteers()}
-            onLiftSaturation={() => void setCenterSaturated(false)}
+            onCause={(value) => void setCenterCause(value)}
+            onDonationsAccepting={(value) => void setDonationsAccepting(value)}
+            onVolunteersAccepting={(value) => void setVolunteersAccepting(value)}
+            sharing={sharing}
+            onShare={() => void shareCenterNeeds()}
           />
         )}
 
@@ -1172,10 +1323,8 @@ export default function RedApoyoApp() {
           <SaturationScreen
             reason={saturationReason}
             onReason={setSaturationReason}
-            alternatives={sortedCenters
-              .filter((center) => center.status === "active" && !(role === "acopio" && center.id === myCenterId))
-              .slice(0, 3)}
-            needs={network.needs}
+            alternatives={sortedCenters.filter((center) => center.status === "active").slice(0, 3)}
+            needs={visibleNeeds}
             position={position}
           />
         )}
@@ -1185,8 +1334,8 @@ export default function RedApoyoApp() {
         {screen === "logistica" && (
           <LogisticsScreen
             centers={sortedCenters}
-            needs={network.needs}
-            requests={network.volunteerRequests}
+            needs={visibleNeeds}
+            requests={visibleVolunteerRequests}
             position={position}
             onLocate={locate}
             busy={busy}
@@ -1200,7 +1349,7 @@ export default function RedApoyoApp() {
         {screen === "donante" && (
           <DonorScreen
             needs={activeNeeds}
-            centers={network.centers}
+            centers={visibleCenters}
             position={position}
             radiusKm={donorRadiusKm}
             onClearRadius={() => setDonorRadiusKm(null)}
@@ -1288,6 +1437,8 @@ function HomeScreen(props: {
   pulse: Pulse;
   position: Position | null;
   role: Role | null;
+  cause: Cause;
+  onCause: (cause: Cause) => void;
   onPick: (role: Role) => void;
   onAyuda: () => void;
   onTutorial: () => void;
@@ -1313,6 +1464,23 @@ function HomeScreen(props: {
         <button type="button" className="pill soft howto-pill" onClick={props.onTutorial}>
           ¿Cómo funciona?
         </button>
+      </div>
+
+      {/* Dos emergencias activas a la vez: esto elige cuál se ve en el resto de la app. */}
+      <div className="cause-switch" role="radiogroup" aria-label="Emergencia a apoyar">
+        {CAUSES.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="radio"
+            aria-checked={props.cause === item.id}
+            className={`cause-option${props.cause === item.id ? " on" : ""} cause-${item.id}`}
+            onClick={() => props.onCause(item.id)}
+          >
+            <UiIcon name={item.id === "tolima" ? "flame" : "alert"} size={18} />
+            {item.label}
+          </button>
+        ))}
       </div>
 
             {/*
@@ -1718,9 +1886,11 @@ function CenterHome(props: {
   onProducts: () => void;
   onReceived: () => void;
   onHands: () => void;
-  onSaturation: () => void;
-  onToggleVolunteers: () => void;
-  onLiftSaturation: () => void;
+  onCause: (value: Cause) => void;
+  onDonationsAccepting: (value: boolean) => void;
+  onVolunteersAccepting: (value: boolean) => void;
+  sharing: boolean;
+  onShare: () => void;
 }) {
   const center = props.center;
   const [view, setView] = useState<"lista" | "mapa">("lista");
@@ -1811,24 +1981,44 @@ function CenterHome(props: {
         <div><strong>{hands}</strong><small>manos solicitadas</small></div>
       </section>
 
-      {/* El interruptor es la única forma de volver: marcar saturado no puede ser de ida. */}
+      <section className="place-card">
+        <label>
+          <span>Causa a la que apoya este centro</span>
+          <div className="cause-switch" role="radiogroup" aria-label="Causa del centro">
+            {CAUSES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="radio"
+                aria-checked={causeOf(center) === item.id}
+                className={`cause-option${causeOf(center) === item.id ? " on" : ""} cause-${item.id}`}
+                onClick={() => props.onCause(item.id)}
+              >
+                <UiIcon name={item.id === "tolima" ? "flame" : "alert"} size={18} />
+                {item.short}
+              </button>
+            ))}
+          </div>
+        </label>
+      </section>
+
       <section className="switch-card">
         <div>
-          <strong>Nuestro centro está saturado</strong>
+          <strong>Se aceptan donaciones</strong>
           <small>
             {center.status === "saturated"
-              ? "No apareces como destino sugerido. Quítalo cuando baje la afluencia."
-              : "Deja de recibir gente y donaciones."}
+              ? "No apareces como destino sugerido. Actívalo cuando vuelvas a recibir."
+              : "Apágalo si dejas de recibir gente y donaciones."}
           </small>
         </div>
         <button
           type="button"
           role="switch"
-          aria-checked={center.status === "saturated"}
-          aria-label="Nuestro centro está saturado"
-          className={center.status === "saturated" ? "on danger" : ""}
+          aria-checked={center.status !== "saturated"}
+          aria-label="Se aceptan donaciones"
+          className={center.status !== "saturated" ? "on" : ""}
           disabled={props.busy}
-          onClick={center.status === "saturated" ? props.onLiftSaturation : props.onSaturation}
+          onClick={() => props.onDonationsAccepting(center.status === "saturated")}
         >
           <i />
         </button>
@@ -1836,21 +2026,30 @@ function CenterHome(props: {
 
       <section className="switch-card">
         <div>
-          <strong>Ya tenemos suficientes voluntarios</strong>
-          <small>Los voluntarios nuevos verán otros centros primero.</small>
+          <strong>Se aceptan voluntarios</strong>
+          <small>
+            {center.volunteersSaturated
+              ? "Los voluntarios nuevos ven otros centros primero. Actívalo cuando necesites más."
+              : "Apágalo si ya tienes suficientes voluntarios."}
+          </small>
         </div>
         <button
           type="button"
           role="switch"
-          aria-checked={Boolean(center.volunteersSaturated)}
-          aria-label="Ya tenemos suficientes voluntarios"
-          className={center.volunteersSaturated ? "on" : ""}
+          aria-checked={!center.volunteersSaturated}
+          aria-label="Se aceptan voluntarios"
+          className={!center.volunteersSaturated ? "on" : ""}
           disabled={props.busy}
-          onClick={props.onToggleVolunteers}
+          onClick={() => props.onVolunteersAccepting(Boolean(center.volunteersSaturated))}
         >
           <i />
         </button>
       </section>
+
+      <button type="button" className="ghost-row" disabled={props.sharing} onClick={props.onShare}>
+        <UiIcon name="share" size={18} />
+        {props.sharing ? "Generando imagen…" : "Compartir necesidades en Instagram"}
+      </button>
 
       <div className="stack">
         <ActionRow icon="package" title="Publicar qué necesitamos" text="Estado y meta por producto" onClick={props.onProducts} />
@@ -1999,6 +2198,23 @@ function NewCenterScreen(props: {
         </label>
       </section>
       <section className="place-card">
+        <label>
+          <span>Causa a la que apoya</span>
+          <div className="chips" role="radiogroup" aria-label="Causa del centro">
+            {CAUSES.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="radio"
+                aria-checked={props.draft.cause === item.id}
+                className={`chip${props.draft.cause === item.id ? " on" : ""}`}
+                onClick={() => set((current) => ({ ...current, cause: item.id }))}
+              >
+                {item.short}
+              </button>
+            ))}
+          </div>
+        </label>
         <label>
           <span>Nombre del centro</span>
           <input
@@ -2338,6 +2554,7 @@ function SaturationScreen(props: {
           </button>
         ))}
       </div>
+
       {props.alternatives.length > 0 && (
         <section className="feed">
           <h2>Redirigir gente hacia</h2>
