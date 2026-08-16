@@ -19,6 +19,8 @@ export type Center = {
   verifiedAt?: string | null;
   status: "active" | "saturated" | "closed";
   volunteersSaturated?: boolean;
+  /** "approximate" = solo tenemos la dirección; el pin es del barrio o de la calle. */
+  locationPrecision?: "exact" | "approximate";
 };
 
 export type Need = {

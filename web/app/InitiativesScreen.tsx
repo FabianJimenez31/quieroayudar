@@ -25,78 +25,58 @@ export default function InitiativesScreen({ onFlash }: { onFlash: (message: stri
   const corporate = INITIATIVES.filter((item) => !OPEN_TO_PUBLIC.has(item.kind));
 
   return (
-    <>
-      <p className="lead-text">
-        Empresas que abrieron un canal para que cualquiera done, y lo que ya entregaron por su
-        cuenta. Aquí no se recauda nada: cada botón te lleva al canal oficial de quien recibe.
+    <div className="dc-body wide-gap" style={{ padding: "16px 0" }}>
+      <p className="dc-note danger">
+        Esta app no recauda un peso. Verifica siempre el número de cuenta en el canal oficial de la
+        empresa antes de transferir.
       </p>
 
-      <section className="place-card">
-        <span className="eyebrow">Aporte empresarial reportado</span>
-        <strong>{BUSINESS_TOTAL.amount}</strong>
-        <small>{BUSINESS_TOTAL.note}</small>
-        <small>
-          <a href={BUSINESS_TOTAL.source.url} target="_blank" rel="noreferrer">
-            Fuente: {BUSINESS_TOTAL.source.name}
-          </a>
-        </small>
+      <section style={{ display: "grid", gap: 8 }}>
+        <span className="dc-eyebrow">Puedes aportar tú</span>
+        {open.map((item) => (
+          <InitiativeCard key={item.id} item={item} onFlash={onFlash} />
+        ))}
       </section>
 
-      <section className="banner warn" role="note">
-        <span>
-          Verifica la cuenta en la página o la línea oficial de la empresa antes de transferir.
-          Nadie de esta plataforma te va a pedir plata ni datos por chat.
-        </span>
-      </section>
-
-      <section className="group">
-        <h2>
-          Puedes aportar tú<span>{open.length}</span>
-        </h2>
-        <div className="stack">
-          {open.map((item) => (
-            <InitiativeCard key={item.id} item={item} onFlash={onFlash} />
-          ))}
-        </div>
-      </section>
-
-      <section className="group">
-        <h2>
-          Ya lo donó la empresa<span>{corporate.length}</span>
-        </h2>
-        <p className="lead-text">
-          No tienen recaudo abierto al público. Si quieres aportar en especie, usa los centros de
-          acopio de la app.
-        </p>
-        <div className="stack">
-          {corporate.map((item) => (
-            <InitiativeCard key={item.id} item={item} onFlash={onFlash} />
-          ))}
-        </div>
-      </section>
-
-      <section className="group">
-        <h2>También se vincularon</h2>
-        <div className="chips">
-          {ALSO_JOINED.map((name) => (
-            <span className="pill soft" key={name}>
-              {name}
+      {/* Sin recaudo abierto: se listan compactas para no invitar a transferir donde no hay dónde. */}
+      <section style={{ display: "grid", gap: 8 }}>
+        <span className="dc-eyebrow">Ya entregado por su cuenta</span>
+        {corporate.map((item) => (
+          <article className="dc-card sm" key={item.id} style={{ alignItems: "center", flexDirection: "row", gap: 10 }}>
+            <span className="dc-sigla sm">{sigla(item.company)}</span>
+            <span style={{ display: "grid", flex: 1, gap: 2, minWidth: 0 }}>
+              <strong style={{ fontSize: "12.5px", fontWeight: 700, lineHeight: 1.2 }}>{item.company}</strong>
+              <span className="dc-sub" style={{ fontSize: "11px" }}>{item.headline}</span>
             </span>
-          ))}
+            <span className="dc-pill-kind">{KIND_LABEL[item.kind]}</span>
+          </article>
+        ))}
+      </section>
+
+      <section style={{ display: "grid", gap: 8 }}>
+        <span className="dc-eyebrow">También se vincularon</span>
+        <div className="dc-chips" style={{ flexWrap: "wrap", overflow: "visible" }}>
+          {ALSO_JOINED.map((name) => <span className="dc-tag soft" key={name}>{name}</span>)}
         </div>
-        <p className="fineprint">
-          Reportadas dentro de la estrategia oficial «Colombia Un Solo Corazón», sin canal propio de
-          donación al público.
-        </p>
       </section>
 
       <p className="fineprint">
-        Lista verificada el {INITIATIVES_VERIFIED_AT} contra las fuentes citadas en cada tarjeta. Las
-        campañas cambian: si encuentras una cerrada o una cuenta distinta, avísanos desde
-        coordinación.
+        Total reportado {BUSINESS_TOTAL.amount} · {BUSINESS_TOTAL.note}{" "}
+        <a href={BUSINESS_TOTAL.source.url} target="_blank" rel="noreferrer">
+          Fuente: {BUSINESS_TOTAL.source.name}
+        </a>
       </p>
-    </>
+      <p className="fineprint">
+        Lista verificada el {INITIATIVES_VERIFIED_AT} contra las fuentes citadas en cada tarjeta.
+      </p>
+    </div>
   );
+}
+
+/** Dos letras de la empresa para la ficha, como en el diseño. */
+function sigla(name: string): string {
+  const words = name.replace(/[^\p{L}\s]/gu, " ").split(/\s+/).filter(Boolean);
+  return ((words[0]?.[0] ?? "") + (words[1]?.[0] ?? words[0]?.[1] ?? "")).toUpperCase();
 }
 
 function InitiativeCard({ item, onFlash }: { item: Initiative; onFlash: (message: string) => void }) {
@@ -114,42 +94,31 @@ function InitiativeCard({ item, onFlash }: { item: Initiative; onFlash: (message
   }
 
   return (
-    <article className="initiative">
-      <div className="initiative-top">
-        <strong>{item.company}</strong>
-        <span className={`pill kind kind--${item.kind}`}>{KIND_LABEL[item.kind]}</span>
+    <article className="dc-card">
+      <div style={{ alignItems: "center", display: "flex", gap: 10 }}>
+        <span className="dc-sigla">{sigla(item.company)}</span>
+        <span style={{ display: "grid", flex: 1, gap: 2, minWidth: 0 }}>
+          <strong style={{ fontSize: "13.5px", fontWeight: 700, lineHeight: 1.2 }}>{item.company}</strong>
+          <span className="dc-sub">{item.headline}</span>
+        </span>
+        <span className="dc-pill-kind">{KIND_LABEL[item.kind]}</span>
       </div>
-      <p className="initiative-lead">{item.headline}</p>
 
-      <ol>
-        {item.steps.map((step) => (
-          <li key={step}>{step}</li>
-        ))}
-      </ol>
+      {item.data?.map((row) => (
+        <div className="dc-account" key={row.label}>
+          <span>{row.value}</span>
+          <button type="button" onClick={() => void copy(row.label, row.value)}>
+            {copied === row.label ? "Copiado" : "Copiar"}
+          </button>
+        </div>
+      ))}
 
-      {item.data && (
-        <dl className="initiative-data">
-          {item.data.map((row) => (
-            <div key={row.label}>
-              <dt>{row.label}</dt>
-              <dd>
-                <span>{row.value}</span>
-                <button type="button" onClick={() => void copy(row.label, row.value)}>
-                  <UiIcon name={copied === row.label ? "check" : "download"} size={14} />
-                  {copied === row.label ? "Copiado" : "Copiar"}
-                </button>
-              </dd>
-            </div>
-          ))}
-        </dl>
-      )}
-
-      {item.until && <p className="note">{item.until}</p>}
+      {item.until && <p className="dc-note warn" style={{ margin: 0 }}>{item.until}</p>}
 
       <div className="initiative-actions">
         {item.link && (
           <a className="route" href={item.link.url} target="_blank" rel="noreferrer">
-            {item.link.label} <UiIcon name="external" size={15} />
+            {item.link.label} <UiIcon name="external" size={14} />
           </a>
         )}
         <a className="initiative-source" href={item.source.url} target="_blank" rel="noreferrer">

@@ -497,6 +497,25 @@ export default function CoordinatorApp() {
     <div className="phone coord-phone">
       <a className="skip-link" href="#panel">Saltar al contenido</a>
 
+      {screen === "inicio" ? (
+        /* El inicio del panel lleva cabecera oscura con las cifras dentro. */
+        <header className="dc-coord-head">
+          <div className="dc-head-row">
+            <Link className="dc-back" href="/" aria-label="Ver la red pública">
+              <UiIcon name="arrow-left" size={19} />
+            </Link>
+            <div className="dc-head-copy">
+              <strong>Coordinación</strong>
+              <small>{subtitle}</small>
+            </div>
+          </div>
+          <div className="dc-stats">
+            <div><strong>{data.centers.filter((center) => center.status === "active").length}</strong><small>centros activos</small></div>
+            <div><strong className="hot">{urgentNeeds}</strong><small>productos urgentes</small></div>
+            <div><strong className="warm">{openHands.length}</strong><small>manos pedidas</small></div>
+          </div>
+        </header>
+      ) : (
       <header className="screen-head">
         {inFlow ? (
           <button type="button" onClick={back} aria-label="Volver">
@@ -520,6 +539,7 @@ export default function CoordinatorApp() {
           <UiIcon name="location" size={20} />
         </button>
       </header>
+      )}
 
       <main className="screen" id="panel" tabIndex={-1} key={screen}>
         {error && (
@@ -545,6 +565,7 @@ export default function CoordinatorApp() {
             onCenter={startCenter}
             onBulk={() => go("masiva")}
             onReports={() => go("reportes")}
+            onRequests={() => go("pedidos")}
           />
         )}
 
@@ -656,14 +677,6 @@ export default function CoordinatorApp() {
         </div>
       )}
 
-      {!inFlow && (
-        <nav className="tabs" aria-label="Secciones del panel">
-          <TabButton label="Inicio" icon="home" on={screen === "inicio"} onClick={() => go("inicio")} />
-          <TabButton label="Centros" icon="building" on={screen === "centros"} onClick={() => go("centros")} />
-          <TabButton label="Pedidos" icon="package" on={screen === "pedidos"} onClick={() => go("pedidos")} />
-          <TabButton label="Reportes" icon="reports" on={screen === "reportes"} badge={pendingReports} onClick={() => go("reportes")} />
-        </nav>
-      )}
 
       {toast && <div className="toast" role="status">{toast}</div>}
     </div>
@@ -699,78 +712,103 @@ function HomeScreen(props: {
   onCenter: () => void;
   onBulk: () => void;
   onReports: () => void;
+  onRequests: () => void;
 }) {
-  const active = props.centers.filter((center) => center.status === "active").length;
   const mine = props.myCenter;
 
   // Un solo hilo de novedades: lo último que pasó en la red, sin importar de qué tipo.
   const feed = useMemo(() => {
     const rows = [
-      ...props.needs.map((need) => ({ at: need.createdAt, text: `${need.name} · ${need.target} ${need.unit}`, tag: "Producto", tone: "coral" })),
-      ...props.reports.filter((report) => report.status !== "rejected").map((report) => ({ at: report.createdAt, text: `${report.city} · ${report.location}`, tag: "Reporte", tone: "gold" })),
+      ...props.needs.map((need) => ({ at: need.createdAt, title: need.name, detail: `${need.target} ${need.unit}`, dot: "#dc2626" })),
+      ...props.reports.filter((report) => report.status !== "rejected").map((report) => ({ at: report.createdAt, title: report.city, detail: report.location, dot: "#d97706" })),
     ];
-    return rows
-      .filter((row) => row.at)
-      .sort((a, b) => String(b.at).localeCompare(String(a.at)))
-      .slice(0, 5);
+    return rows.filter((row) => row.at).sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 4);
   }, [props.needs, props.reports]);
 
-  return (
-    <>
-      <section className="summary coord-summary">
-        <div><strong>{active}</strong><small>centros activos</small></div>
-        <div><strong>{props.urgent}</strong><small>productos urgentes</small></div>
-        <div><strong>{props.hands}</strong><small>manos pedidas</small></div>
-      </section>
+  const STATES: { id: Center["status"]; label: string }[] = [
+    { id: "active", label: "Recibiendo" },
+    { id: "saturated", label: "Saturado" },
+    { id: "closed", label: "Cerrado" },
+  ];
 
+  return (
+    <div className="dc-body" style={{ padding: "14px 0 24px" }}>
       {mine ? (
-        <section className="place-card my-center">
-          <p className="eyebrow">Mi centro</p>
-          <strong>{mine.name}</strong>
-          <small>{mine.city} · {mine.address}</small>
-          <div className="states">
-            <button type="button" aria-pressed={mine.status === "active"} onClick={() => props.onCenterStatus(mine, "active")}>Recibiendo</button>
-            <button type="button" aria-pressed={mine.status === "saturated"} onClick={() => props.onCenterStatus(mine, "saturated")}>Saturado</button>
-            <button type="button" aria-pressed={mine.status === "closed"} onClick={() => props.onCenterStatus(mine, "closed")}>Cerrado</button>
+        <section className="dc-card" style={{ gap: 12 }}>
+          <div className="dc-kv" style={{ alignItems: "center" }}>
+            <span style={{ display: "grid", gap: 2 }}>
+              <span className="dc-eyebrow soft">Mi centro</span>
+              <strong className="dc-h">{mine.name}</strong>
+            </span>
+            <button type="button" className="dc-linkbtn" onClick={props.onChooseCenter}>Cambiar</button>
           </div>
-          <button type="button" className="link-row" onClick={props.onChooseCenter}>Cambiar de centro</button>
+          <div className="dc-states">
+            {STATES.map((state) => (
+              <button
+                key={state.id}
+                type="button"
+                aria-pressed={mine.status === state.id}
+                onClick={() => props.onCenterStatus(mine, state.id)}
+              >
+                {state.label}
+              </button>
+            ))}
+          </div>
         </section>
       ) : (
-        <button type="button" className="ghost-row" onClick={props.onChooseCenter}>
-          <UiIcon name="building" size={18} />
+        <button type="button" className="dc-dashed" onClick={props.onChooseCenter}>
           Elige tu centro y todo se llena solo
         </button>
       )}
 
-      <div className="stack">
-        <ActionRow icon="package" title="Pedir productos" text="Marca qué falta y cuánto" onClick={props.onNeeds} />
-        <ActionRow icon="users" title="Pedir manos" text="Voluntarios para un turno" onClick={props.onHands} />
-        <ActionRow icon="building" title="Registrar un centro" text="Dos pasos y queda en el mapa" onClick={props.onCenter} />
-        {props.pending > 0 && (
-          <ActionRow icon="reports" title={`${props.pending} reportes por revisar`} text="Llegaron desde terreno" tone="alert" onClick={props.onReports} />
-        )}
+      <div className="dc-tiles">
+        <button type="button" className="dc-tile compact" onClick={props.onNeeds}>
+          <span><UiIcon name="package" size={17} /></span>
+          <strong>Pedir productos</strong>
+        </button>
+        <button type="button" className="dc-tile compact" onClick={props.onHands}>
+          <span><UiIcon name="users" size={17} /></span>
+          <strong>Pedir manos</strong>
+        </button>
+        <button type="button" className="dc-tile compact" onClick={props.onRequests}>
+          <span><UiIcon name="check" size={17} /></span>
+          <strong>Pedidos y recibido</strong>
+        </button>
+        <button type="button" className={`dc-tile compact${props.pending > 0 ? " danger" : ""}`} onClick={props.onReports}>
+          <span><UiIcon name="reports" size={17} /></span>
+          <strong>{props.pending > 0 ? `Reportes · ${props.pending} por revisar` : "Reportes"}</strong>
+        </button>
       </div>
 
-      <button type="button" className="ghost-row" onClick={props.onBulk}>
-        <UiIcon name="download" size={18} />
-        Subir varios centros desde un Excel
+      <button type="button" className="dc-dashed" style={{ alignItems: "center", display: "flex", gap: 11, textAlign: "left" }} onClick={props.onBulk}>
+        <span className="dc-sigla sm" style={{ background: "#fff", color: "#1d4ed8" }}><UiIcon name="download" size={16} /></span>
+        <span style={{ display: "grid", flex: 1, gap: 2 }}>
+          <strong style={{ color: "#0f172a", fontSize: "12.5px", fontWeight: 700 }}>Carga masiva</strong>
+          <span className="dc-sub" style={{ fontSize: "11px" }}>Excel, CSV o pegar desde la hoja</span>
+        </span>
+      </button>
+
+      <button type="button" className="dc-tile compact" style={{ minHeight: 0 }} onClick={props.onCenter}>
+        <span><UiIcon name="building" size={17} /></span>
+        <strong>Registrar un centro · dos pasos</strong>
       </button>
 
       {feed.length > 0 && (
-        <section className="feed">
-          <h2>Lo último</h2>
+        <section style={{ display: "grid", gap: 8 }}>
+          <p className="dc-h" style={{ fontSize: "13.5px", margin: 0 }}>Lo último</p>
           {feed.map((row, index) => (
-            <article key={`${row.tag}-${index}`}>
-              <span className={`pill ${row.tone === "coral" ? "urgent" : "soft"}`}>{row.tag}</span>
-              <div>
-                <strong>{row.text}</strong>
-                <small>{whenOf(row.at)}</small>
-              </div>
+            <article className="dc-card sm" key={`${row.title}-${index}`} style={{ alignItems: "center", flexDirection: "row", gap: 10 }}>
+              <i aria-hidden="true" style={{ background: row.dot, borderRadius: "50%", flex: "none", height: 7, width: 7 }} />
+              <span style={{ display: "grid", flex: 1, gap: 2, minWidth: 0 }}>
+                <strong style={{ fontSize: "12.5px", fontWeight: 600, lineHeight: 1.25 }}>{row.title}</strong>
+                <span className="dc-sub" style={{ fontSize: "11px" }}>{row.detail}</span>
+              </span>
+              <span style={{ color: "#94a3b8", flex: "none", fontSize: "10.5px", fontWeight: 500 }}>{whenOf(row.at)}</span>
             </article>
           ))}
         </section>
       )}
-    </>
+    </div>
   );
 }
 
@@ -1270,118 +1308,151 @@ function RequestsScreen(props: {
   onNewHands: () => void;
 }) {
   const [kind, setKind] = useState<"productos" | "manos">("productos");
-  const [query, setQuery] = useState("");
+  // Lo que va llegando se teclea aquí antes de confirmarlo contra el servidor.
+  const [arrived, setArrived] = useState<Record<string, number>>({});
   const nameOf = (id: string) => props.centers.find((center) => center.id === id)?.name ?? "Centro";
-  const key = norm(query);
-
-  const needs = props.needs.filter((need) => !key || norm(`${need.name} ${nameOf(need.centerId)}`).includes(key));
-  const hands = props.hands.filter((item) => !key || norm(`${item.kind} ${nameOf(item.centerId)}`).includes(key));
 
   return (
     <>
-      <div className="status-choice">
-        <button type="button" aria-pressed={kind === "productos"} onClick={() => setKind("productos")}>Productos</button>
-        <button type="button" aria-pressed={kind === "manos"} onClick={() => setKind("manos")}>Manos</button>
+      <div className="dc-subhead">
+        <div className="dc-seg" role="group" aria-label="Tipo de pedido">
+          <button type="button" aria-pressed={kind === "productos"} onClick={() => setKind("productos")}>Productos</button>
+          <button type="button" aria-pressed={kind === "manos"} onClick={() => setKind("manos")}>Manos</button>
+        </div>
       </div>
 
-      <label className="search-box">
-        <UiIcon name="package" size={18} />
-        <input
-          type="search"
-          value={query}
-          placeholder={kind === "productos" ? "Buscar producto o centro" : "Buscar tarea o centro"}
-          aria-label="Buscar"
-          onChange={(event) => setQuery(event.target.value)}
-        />
-      </label>
+      <div className="dc-body tight" style={{ padding: "14px 0 24px" }}>
+        {kind === "productos" && props.needs.length === 0 && <p className="empty">Nada publicado todavía.</p>}
 
-      {kind === "productos" &&
-        (needs.length === 0 ? (
-          <p className="empty">Aún no se está pidiendo nada.</p>
-        ) : (
-          needs.map((need) => {
-            const step = stepFor(need.name);
-            const done = Math.min(100, Math.round(((need.covered + need.committed) / Math.max(1, need.target)) * 100));
-            return (
-              <section className={`product${need.status === "urgent" ? " urgent" : ""}${need.status === "blocked" ? " blocked" : ""}`} key={need.id}>
-                <strong>{need.name}</strong>
-                <small className="meta">{nameOf(need.centerId)} · {need.covered + need.committed} de {need.target} {need.unit}</small>
-                <div className="bar"><i style={{ width: `${done}%` }} /></div>
-                {need.status === "blocked" ? (
-                  <button type="button" className="link-row" onClick={() => props.onNeedStatus(need, "urgent")}>Volver a pedirlo</button>
-                ) : (
-                  <div className="need-actions">
-                    <button type="button" onClick={() => props.onReceive(need, step)}>
-                      <UiIcon name="plus" size={16} /> Llegaron {step}
-                    </button>
-                    <button type="button" className="link-row danger" onClick={() => props.onNeedStatus(need, "blocked")}>Ya no hace falta</button>
-                  </div>
-                )}
-              </section>
-            );
-          })
-        ))}
-
-      {kind === "manos" &&
-        (hands.length === 0 ? (
-          <p className="empty">No hay solicitudes de voluntarios.</p>
-        ) : (
-          hands.map((item) => (
-            <section className="place-card" key={item.id}>
-              <strong>{item.kind}</strong>
-              <small>{nameOf(item.centerId)} · {item.accepted} de {item.quantity} confirmados</small>
-              <div className="states">
-                <button type="button" aria-pressed={item.status === "open"} onClick={() => props.onHandsStatus(item, "open")}>Abierta</button>
-                <button type="button" aria-pressed={item.status === "filled"} onClick={() => props.onHandsStatus(item, "filled")}>Cubierta</button>
-                <button type="button" aria-pressed={item.status === "closed"} onClick={() => props.onHandsStatus(item, "closed")}>Cerrada</button>
+        {kind === "productos" && props.needs.map((need) => {
+          const pending = Math.max(0, need.target - need.covered);
+          const amount = arrived[need.id] ?? 0;
+          const percent = Math.min(100, Math.round(((need.covered + need.committed) / Math.max(1, need.target)) * 100));
+          const urgent = need.status === "urgent";
+          return (
+            <article className="dc-card" key={need.id}>
+              <div className="dc-kv" style={{ alignItems: "flex-start", gap: 8 }}>
+                <span style={{ display: "grid", flex: 1, gap: 3, minWidth: 0 }}>
+                  <strong style={{ fontSize: "13.5px", lineHeight: 1.2 }}>{need.name}</strong>
+                  <span className="dc-sub">
+                    {need.covered} de {need.target} {need.unit} · {need.committed} prometido · {nameOf(need.centerId)}
+                  </span>
+                </span>
+                <span className={`dc-tag ${urgent ? "urgent" : need.status === "blocked" ? "ok" : "soft"}`}>
+                  {urgent ? "Urgente" : need.status === "blocked" ? "Cubierto" : "Normal"}
+                </span>
               </div>
-            </section>
-          ))
-        ))}
+              <div className="dc-bar"><i style={{ background: urgent ? "#dc2626" : "#2563eb", width: `${percent}%` }} /></div>
+              <div className="dc-step-row">
+                <span>Llegó ahora</span>
+                <div>
+                  <div className="dc-step sm" style={{ gap: 9 }}>
+                    <button type="button" aria-label={`Menos ${need.name}`} onClick={() => setArrived((c) => ({ ...c, [need.id]: Math.max(0, amount - 1) }))}>−</button>
+                    <strong>{amount}</strong>
+                    <button type="button" className="plus" aria-label={`Más ${need.name}`} onClick={() => setArrived((c) => ({ ...c, [need.id]: Math.min(pending, amount + 1) }))}>+</button>
+                  </div>
+                  <button
+                    type="button"
+                    className="dc-solid ink"
+                    disabled={amount < 1}
+                    style={{ marginLeft: 9 }}
+                    onClick={() => { props.onReceive(need, amount); setArrived((c) => ({ ...c, [need.id]: 0 })); }}
+                  >
+                    Registrar
+                  </button>
+                </div>
+              </div>
+            </article>
+          );
+        })}
 
-      <button type="button" className="ghost-row" onClick={kind === "productos" ? props.onNewNeed : props.onNewHands}>
-        <UiIcon name="plus" size={18} />
-        {kind === "productos" ? "Pedir más productos" : "Pedir más manos"}
-      </button>
+        {kind === "manos" && props.hands.length === 0 && <p className="empty">Ninguna solicitud abierta.</p>}
+
+        {kind === "manos" && props.hands.map((item) => (
+          <article className="dc-card" key={item.id}>
+            <div className="dc-kv" style={{ alignItems: "flex-start", gap: 8 }}>
+              <span style={{ display: "grid", flex: 1, gap: 3, minWidth: 0 }}>
+                <strong style={{ fontSize: "13.5px", lineHeight: 1.2 }}>{item.kind}</strong>
+                <span className="dc-sub">
+                  {item.accepted} de {item.quantity} personas confirmadas · {nameOf(item.centerId)}
+                </span>
+              </span>
+              <span className={`dc-tag ${item.status === "open" ? "warn" : item.status === "filled" ? "ok" : "soft"}`}>
+                {item.status === "open" ? "Abierta" : item.status === "filled" ? "Llena" : "Cerrada"}
+              </span>
+            </div>
+            <div className="dc-row-actions">
+              <button type="button" className="dc-ghost dark" onClick={() => props.onHandsStatus(item, "closed")}>
+                Cerrar solicitud
+              </button>
+              <button type="button" className="dc-solid" onClick={() => props.onHandsStatus(item, "open")}>
+                Pedir más
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
     </>
   );
 }
 
 function ReportsScreen(props: { reports: Report[]; onStatus: (report: Report, status: Report["status"]) => void }) {
-  const [filter, setFilter] = useState<"pending" | "verified" | "rejected">("pending");
-  const labels = { products: "Productos", hands: "Manos", saturation: "Saturación" };
+  const [filter, setFilter] = useState<"pending" | "verified" | "rejected">("verified");
+  const FILTERS: { id: typeof filter; label: string }[] = [
+    { id: "verified", label: "Publicados" },
+    { id: "pending", label: "Por revisar" },
+    { id: "rejected", label: "Retirados" },
+  ];
   const list = props.reports.filter((report) => report.status === filter);
 
   return (
     <>
-      <div className="status-choice">
-        <button type="button" aria-pressed={filter === "pending"} onClick={() => setFilter("pending")}>Por revisar</button>
-        <button type="button" aria-pressed={filter === "verified"} onClick={() => setFilter("verified")}>Publicados</button>
-        <button type="button" aria-pressed={filter === "rejected"} onClick={() => setFilter("rejected")}>Retirados</button>
+      <div className="dc-subhead">
+        <div className="dc-chips" style={{ overflow: "visible" }}>
+          {FILTERS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              style={{ flex: 1 }}
+              aria-pressed={filter === item.id}
+              onClick={() => setFilter(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <p className="banner warn">
-        Los reportes se publican solos al llegar. Este panel sirve para retirar lo falso, duplicado o peligroso.
-      </p>
-
-      {list.length === 0 ? (
-        <p className="empty">Nada por aquí.</p>
-      ) : (
-        list.map((report) => (
-          <section className="place-card report-row" key={report.id}>
-            <div className="report-meta">
-              <span className={`report-category ${report.category}`}>{labels[report.category]}</span>
-              <small>{whenOf(report.createdAt)}</small>
-            </div>
-            <strong>{report.city} · {report.location}</strong>
-            <p>{report.details}</p>
-            <div className="states">
-              <button type="button" aria-pressed={report.status === "verified"} onClick={() => props.onStatus(report, "verified")}>Dejar publicado</button>
-              <button type="button" aria-pressed={report.status === "rejected"} onClick={() => props.onStatus(report, "rejected")}>Retirar</button>
-            </div>
-          </section>
-        ))
-      )}
+      <div className="dc-body tight" style={{ padding: "14px 0 24px" }}>
+        {list.length === 0 ? (
+          <p className="empty">Nada por aquí.</p>
+        ) : (
+          list.map((report) => (
+            <article className="dc-card" key={report.id}>
+              <div className="dc-kv" style={{ alignItems: "flex-start", gap: 8 }}>
+                <span style={{ display: "grid", flex: 1, gap: 3, minWidth: 0 }}>
+                  <strong style={{ fontSize: "13px", lineHeight: 1.25 }}>{report.city} · {report.location}</strong>
+                  <span className="dc-sub">{report.details}</span>
+                </span>
+                <span style={{ color: "#94a3b8", flex: "none", fontSize: "10.5px", fontWeight: 500 }}>
+                  {whenOf(report.createdAt)}
+                </span>
+              </div>
+              <div className="dc-row-actions">
+                {report.status === "rejected" ? (
+                  <button type="button" className="dc-ghost dark" onClick={() => props.onStatus(report, "verified")}>
+                    Volver a publicar
+                  </button>
+                ) : (
+                  <button type="button" className="dc-ghost danger" onClick={() => props.onStatus(report, "rejected")}>
+                    Retirar
+                  </button>
+                )}
+              </div>
+            </article>
+          ))
+        )}
+      </div>
     </>
   );
 }

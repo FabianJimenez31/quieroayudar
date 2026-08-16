@@ -30,6 +30,7 @@ def migrate_centers_provenance() -> None:
         "source_url": "ALTER TABLE centers ADD COLUMN source_url VARCHAR(500) NOT NULL DEFAULT '' AFTER source_name",
         "verified_at": "ALTER TABLE centers ADD COLUMN verified_at DATETIME NULL AFTER source_url",
         "volunteers_saturated": "ALTER TABLE centers ADD COLUMN volunteers_saturated TINYINT(1) NOT NULL DEFAULT 0 AFTER status",
+        "location_precision": "ALTER TABLE centers ADD COLUMN location_precision VARCHAR(12) NOT NULL DEFAULT 'exact' AFTER longitude",
     }
     with engine.begin() as connection:
         for column, statement in statements.items():
@@ -277,6 +278,7 @@ def create_center(
         source_name=payload.sourceName,
         source_url=payload.sourceUrl,
         verified_at=utcnow() if payload.sourceUrl else None,
+        location_precision=payload.locationPrecision,
         status="active",
     )
     db.add(center)

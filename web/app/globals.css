@@ -711,3 +711,224 @@ a.row-card.coord-entry { color:inherit; text-decoration:none; }
 .emergency-row { align-items:center; background:#fff5f5; border:1px solid #fbd5d5; border-radius:14px; color:#b91c1c; cursor:pointer; display:flex; justify-content:space-between; min-height:48px; padding:12px 14px; text-align:left; width:100%; }
 .emergency-row strong { font-size:13px; font-weight:700; line-height:1.2; }
 .fineprint.center { text-align:center; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Maquetación del rediseño (Ayuda Colombia · Newton Design Kit).
+   Cada medida sale del mockup; el prefijo dc- las separa de lo anterior.
+   La navegación pasa a cabecera pegajosa con botón atrás: el diseño no
+   lleva barra de pestañas inferior.
+   ═══════════════════════════════════════════════════════════════════ */
+
+.dc { background:#f6f8fb; display:flex; flex-direction:column; margin:0 auto; max-width:480px; min-height:100dvh; }
+
+/* ── Cabecera pegajosa ── */
+.dc-head { background:#fff; border-bottom:1px solid #e8edf4; display:flex; flex-direction:column; gap:10px; padding:12px 16px; position:sticky; top:0; z-index:5; }
+.dc-head-row { align-items:center; display:flex; gap:10px; }
+.dc-back { align-items:center; background:#fff; border:1px solid #e2e8f0; border-radius:11px; color:#0f172a; cursor:pointer; display:flex; flex:none; height:34px; justify-content:center; width:34px; }
+.dc-head-copy { flex:1; min-width:0; }
+.dc-head-copy strong { color:#0f172a; display:block; font-size:14.5px; font-weight:700; line-height:1.2; }
+.dc-head-copy small { color:#64748b; display:block; font-size:11.5px; font-weight:400; line-height:1.3; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* ── Cuerpo ── */
+.dc-body { display:flex; flex-direction:column; gap:14px; padding:16px; }
+.dc-body.tight { gap:10px; padding:14px 16px 24px; }
+.dc-body.wide-gap { gap:16px; }
+
+/* ── Piezas base ── */
+.dc-card { background:#fff; border:1px solid #e8edf4; border-radius:16px; display:flex; flex-direction:column; gap:10px; padding:14px; }
+.dc-card.sm { border-radius:14px; gap:6px; padding:12px; }
+.dc-eyebrow { color:#64748b; font-size:11px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; }
+.dc-eyebrow.soft { font-size:10.5px; font-weight:600; letter-spacing:.06em; }
+.dc-h { color:#0f172a; font-size:14px; font-weight:700; line-height:1.2; }
+.dc-h.lg { font-size:16px; }
+.dc-sub { color:#64748b; font-size:11.5px; font-weight:400; line-height:1.35; }
+.dc-input { background:#fff; border:1px solid #dbe3ee; border-radius:12px; color:#0f172a; font-size:14px; font-weight:500; outline:none; padding:12px 13px; width:100%; }
+.dc-input.sm { font-size:13.5px; padding:10px 12px; }
+.dc-dashed { background:#f4f7ff; border:1px dashed #b9c8e0; border-radius:12px; color:#1d4ed8; cursor:pointer; font-size:12.5px; font-weight:600; padding:11px; width:100%; }
+
+/* ── Rejilla de fichas (zona afectada, panel de coordinación) ── */
+.dc-tiles { display:grid; gap:8px; grid-template-columns:1fr 1fr; }
+.dc-tile { background:#fff; border:1px solid #e8edf4; border-radius:16px; cursor:pointer; display:flex; flex-direction:column; gap:8px; min-height:96px; padding:14px; text-align:left; }
+.dc-tile>span { align-items:center; background:#e6ecfd; border-radius:10px; color:#1d4ed8; display:flex; flex:none; height:34px; justify-content:center; width:34px; }
+.dc-tile strong { color:#0f172a; font-size:13px; font-weight:700; line-height:1.25; }
+.dc-tile.warn { background:#fffaf1; border-color:#f6e3c4; }
+.dc-tile.warn>span { background:#fdf0dc; color:#b45309; }
+.dc-tile.warn strong { color:#7c2d12; }
+.dc-tile.danger { background:#fff5f5; border-color:#fbd5d5; }
+.dc-tile.danger>span { background:#fbdada; color:#b91c1c; }
+.dc-tile.danger strong { color:#991b1b; }
+.dc-tile.compact { border-radius:15px; gap:7px; min-height:0; padding:13px; }
+.dc-tile.compact>span { border-radius:9px; height:32px; width:32px; }
+.dc-tile.compact strong { font-size:12.5px; }
+
+/* ── Barra oscura de cifras ── */
+.dc-stats { background:#0f172a; border-radius:16px; display:grid; gap:8px; grid-template-columns:repeat(3,1fr); padding:14px 12px; }
+.dc-stats div { display:flex; flex-direction:column; gap:2px; }
+.dc-stats strong { color:#fff; font-size:20px; font-variant-numeric:tabular-nums; line-height:1; }
+.dc-stats small { color:#94a3b8; font-size:10.5px; font-weight:500; line-height:1.2; }
+.dc-stats .hot { color:#f87171; }
+.dc-stats .warm { color:#fbbf24; }
+
+/* ── Fila seleccionable (tareas, motivos) ── */
+.dc-pick { align-items:center; background:#fff; border:1.5px solid #e8edf4; border-radius:14px; cursor:pointer; display:flex; gap:11px; padding:13px; text-align:left; width:100%; }
+.dc-pick.on { background:#f4f7ff; border-color:#2563eb; }
+.dc-pick>span.sigla { align-items:center; background:#e6ecfd; border-radius:9px; color:#1d4ed8; display:flex; flex:none; font-size:13px; font-weight:700; height:32px; justify-content:center; width:32px; }
+.dc-pick strong { color:#0f172a; flex:1; font-size:13.5px; font-weight:700; line-height:1.2; }
+.dc-pick .check { color:#2563eb; flex:none; font-size:13px; font-weight:700; }
+.dc-pick>span.dot { align-items:center; border:2px solid #dbe3ee; border-radius:50%; display:flex; flex:none; height:18px; justify-content:center; width:18px; }
+.dc-pick>span.dot i { background:transparent; border-radius:50%; display:block; height:8px; width:8px; }
+.dc-pick.on>span.dot { border-color:#2563eb; }
+.dc-pick.on>span.dot i { background:#2563eb; }
+.dc-pick.radio strong { font-size:13px; font-weight:600; line-height:1.3; }
+.dc-pick.radio { border-radius:13px; }
+
+/* ── Steppers ── */
+.dc-step { align-items:center; display:flex; justify-content:space-between; }
+.dc-step button { align-items:center; background:#fff; border:1px solid #dbe3ee; border-radius:13px; color:#0f172a; cursor:pointer; display:flex; font-size:20px; font-weight:700; height:46px; justify-content:center; width:46px; }
+.dc-step button.plus { background:#2563eb; border-color:#2563eb; color:#fff; }
+.dc-step>strong { color:#0f172a; font-size:30px; font-variant-numeric:tabular-nums; line-height:1; }
+.dc-step-val { align-items:center; display:flex; flex-direction:column; }
+.dc-step-val small { color:#94a3b8; font-size:11px; font-weight:500; line-height:1.4; }
+.dc-step.sm button { border-radius:9px; font-size:15px; height:32px; width:32px; }
+.dc-step.sm>strong { font-size:13.5px; min-width:46px; text-align:center; }
+.dc-step-row { align-items:center; border-top:1px dashed #e8edf4; display:flex; justify-content:space-between; padding-top:10px; }
+.dc-step-row>span { color:#64748b; font-size:11.5px; font-weight:600; line-height:1.2; }
+.dc-step-row>div { align-items:center; display:flex; gap:9px; }
+
+/* ── Botón principal del kit ── */
+.dc-cta { background:linear-gradient(135deg,#1d4ed8,#1e3a8a); border:0; border-radius:12px; box-shadow:0 14px 30px rgba(29,78,216,.32); color:#fff; cursor:pointer; display:block; font-size:14.5px; font-weight:700; min-height:50px; width:100%; }
+.dc-cta.urgent { background:linear-gradient(135deg,#dc2626,#991b1b); box-shadow:0 14px 30px rgba(220,38,38,.32); }
+.dc-cta:disabled { box-shadow:none; opacity:.55; }
+/* El CTA se queda al pie con un degradado que funde el listado. */
+.dc-sticky-cta { background:linear-gradient(180deg,rgba(246,248,251,0),#f6f8fb 40%); bottom:0; padding-top:6px; position:sticky; }
+
+/* ── Estados en rejilla de tres (productos) ── */
+.dc-states { display:grid; gap:6px; grid-template-columns:repeat(3,1fr); }
+.dc-states button { background:#fff; border:1px solid #e2e8f0; border-radius:10px; color:#64748b; cursor:pointer; font-size:11.5px; font-weight:700; padding:9px 4px; }
+.dc-states button[aria-pressed="true"]:nth-child(1) { background:#fdeaea; border-color:#dc2626; color:#b91c1c; }
+.dc-states button[aria-pressed="true"]:nth-child(2) { background:#e6ecfd; border-color:#2563eb; color:#1d4ed8; }
+.dc-states button[aria-pressed="true"]:nth-child(3) { background:#e7f6ef; border-color:#059669; color:#047857; }
+
+/* ── Etiquetas, chips, progreso ── */
+.dc-tag { border-radius:8px; flex:none; font-size:10.5px; font-weight:700; padding:5px 8px; }
+.dc-tag.urgent { background:#fdeaea; color:#b91c1c; }
+.dc-tag.soft { background:#e6ecfd; color:#1d4ed8; }
+.dc-tag.ok { background:#e7f6ef; color:#047857; }
+.dc-tag.warn { background:#fff6e8; color:#b45309; }
+.dc-chips { display:flex; gap:6px; overflow-x:auto; padding-bottom:2px; scrollbar-width:none; }
+.dc-chips::-webkit-scrollbar { display:none; }
+.dc-chips button { background:#fff; border:1px solid #dbe3ee; border-radius:999px; color:#475569; cursor:pointer; flex:none; font-size:11.5px; font-weight:600; padding:7px 12px; }
+.dc-chips button[aria-pressed="true"] { background:#e6ecfd; border-color:#2563eb; color:#1d4ed8; font-weight:700; }
+.dc-bar { background:#eef2f7; border-radius:999px; height:8px; overflow:hidden; }
+.dc-bar i { border-radius:999px; display:block; height:100%; }
+.dc-bar-copy { color:#64748b; display:flex; font-size:10.5px; font-weight:600; justify-content:space-between; }
+
+/* ── Conmutador segmentado ── */
+.dc-seg { background:#f1f5f9; border-radius:11px; display:flex; padding:3px; }
+.dc-seg button { background:none; border:0; border-radius:9px; color:#64748b; cursor:pointer; flex:1; font-size:12px; font-weight:700; padding:9px; }
+.dc-seg button[aria-pressed="true"] { background:#fff; color:#0f172a; }
+.dc-toggle { border:1px solid #dbe3ee; border-radius:10px; display:flex; flex:none; overflow:hidden; }
+.dc-toggle button { background:#fff; border:0; color:#64748b; cursor:pointer; font-size:11px; font-weight:700; padding:8px 10px; }
+.dc-toggle button[aria-pressed="true"] { background:#2563eb; color:#fff; }
+
+/* ── Botones secundarios de fila ── */
+.dc-ghost { background:#f6f8fb; border:1px solid #dbe3ee; border-radius:11px; color:#1d4ed8; cursor:pointer; font-size:12px; font-weight:700; padding:10px; }
+.dc-ghost.dark { color:#0f172a; }
+.dc-ghost.danger { background:#fff5f5; border-color:#fbd5d5; color:#b91c1c; }
+.dc-solid { background:#2563eb; border:0; border-radius:11px; color:#fff; cursor:pointer; font-size:12.5px; font-weight:700; padding:11px; }
+.dc-solid.ink { background:#0f172a; border-radius:9px; font-size:11.5px; padding:9px 12px; }
+.dc-linkbtn { background:none; border:0; color:#2563eb; cursor:pointer; font-size:11.5px; font-weight:700; padding:8px; }
+.dc-row-actions { display:flex; gap:8px; }
+.dc-row-actions>* { flex:1; }
+.dc-row-actions>.flexnone { flex:none; }
+
+/* ── Avisos ── */
+.dc-note { border-radius:14px; font-size:11.5px; font-weight:500; line-height:1.45; padding:12px; }
+.dc-note.warn { background:#fffaf1; border:1px solid #f6e3c4; color:#7c2d12; }
+.dc-note.danger { background:#fff5f5; border:1px solid #fbd5d5; color:#991b1b; }
+.dc-note.ok { background:#f0fbf5; border:1px solid #cfe3d8; color:#065f46; }
+.dc-live { align-items:center; background:#f0fbf5; border:1px solid #cfe3d8; border-radius:14px; display:flex; gap:10px; padding:12px; }
+.dc-live>i { background:#059669; border-radius:50%; flex:none; height:8px; width:8px; }
+.dc-live>span { color:#065f46; flex:1; font-size:12px; font-weight:600; line-height:1.35; }
+.dc-live button { background:none; border:0; color:#059669; cursor:pointer; font-size:11.5px; font-weight:700; }
+
+/* ── Pantalla de emergencia a sangre ── */
+.dc-emergency { background:#7f1d1d; display:flex; flex-direction:column; gap:20px; min-height:100dvh; padding:26px 20px; }
+.dc-emergency .dc-back { background:rgba(255,255,255,.1); border-color:rgba(255,255,255,.3); color:#fff; height:36px; width:36px; }
+.dc-emergency h2 { color:#fff; font-size:26px; font-weight:700; line-height:1.2; margin:0; text-wrap:pretty; }
+.dc-emergency p { color:#fecaca; font-size:14.5px; line-height:1.5; margin:0; }
+.dc-emergency .dc-call { align-items:center; background:#fff; border-radius:18px; display:flex; flex-direction:column; gap:4px; padding:20px; text-decoration:none; }
+.dc-emergency .dc-call strong { color:#7f1d1d; font-size:34px; font-weight:700; line-height:1; }
+.dc-emergency .dc-call small { color:#991b1b; font-size:12px; font-weight:600; }
+.dc-emergency aside { border:1px solid rgba(255,255,255,.2); border-radius:14px; color:#fecaca; font-size:12px; line-height:1.5; padding:14px; }
+
+/* ── Confirmación ── */
+.dc-done { display:flex; flex-direction:column; gap:18px; padding:26px 18px; }
+.dc-done>.tick { align-items:center; background:#059669; border-radius:20px; color:#fff; display:flex; flex:none; height:62px; justify-content:center; width:62px; }
+.dc-done h2 { color:#0f172a; font-size:24px; font-weight:700; line-height:1.2; margin:0; }
+.dc-done>p { color:#64748b; font-size:14px; line-height:1.5; margin:0; }
+.dc-kv { display:flex; justify-content:space-between; }
+.dc-kv>span { color:#64748b; font-size:12px; font-weight:500; }
+.dc-kv>strong { color:#0f172a; font-size:12px; font-weight:700; }
+.dc-kv>strong.warn { color:#b45309; }
+.dc-hr { background:#eef2f7; height:1px; }
+
+/* ── Cabecera oscura del panel de coordinación ── */
+.dc-coord-head { background:#0f172a; display:flex; flex-direction:column; gap:14px; padding:16px; }
+.dc-coord-head .dc-back { background:rgba(255,255,255,.08); border-color:rgba(255,255,255,.2); color:#fff; }
+.dc-coord-head .dc-head-copy strong { color:#fff; }
+.dc-coord-head .dc-head-copy small { color:#94a3b8; }
+.dc-coord-head .dc-stats { background:none; border-radius:0; padding:0; }
+
+/* ── Armazón con la forma del rediseño ── */
+.phone { background:#f6f8fb; }
+/* Cabecera: botón atrás con borde de 34 px y título de 14.5, como el mockup. */
+.screen-head { border-bottom:1px solid #e8edf4; gap:10px; padding:12px 16px; }
+.screen-head>button { background:#fff; border:1px solid #e2e8f0; border-radius:11px; color:#0f172a; height:34px; width:34px; }
+.screen-head>button.on { background:#e6ecfd; border-color:#2563eb; color:#2563eb; }
+.screen-head strong { font-size:14.5px; font-weight:700; letter-spacing:0; line-height:1.2; }
+.screen-head small { color:#64748b; font-size:11.5px; font-weight:400; line-height:1.3; margin-top:1px; }
+/* Sin barra de pestañas: el diseño navega solo con el botón atrás. */
+.screen { padding:16px 16px 96px; }
+.screen>*+* { margin-top:0; }
+.cta-bar { background:linear-gradient(180deg,rgba(246,248,251,0),#f6f8fb 42%); border-top:0; padding:14px 16px calc(14px + env(safe-area-inset-bottom)); }
+.cta-bar button { background:linear-gradient(135deg,#1d4ed8,#1e3a8a); border-radius:12px; box-shadow:0 14px 30px rgba(29,78,216,.32); font-size:14.5px; font-weight:700; min-height:50px; }
+.cta-bar button:hover { background:linear-gradient(135deg,#1e40af,#1e3a8a); }
+.cta-bar button:disabled { box-shadow:none; opacity:.55; }
+/* Buscador y chips pegados bajo la cabecera, como en el diseño. */
+.dc-subhead { background:#fff; border-bottom:1px solid #e8edf4; display:flex; flex-direction:column; gap:10px; margin:-16px -16px 0; padding:0 16px 12px; position:sticky; top:59px; z-index:4; }
+.dc-title { color:#0f172a; font-size:28px; font-weight:700; letter-spacing:-.01em; line-height:1.15; margin:0; text-wrap:pretty; }
+.dc-lead { color:#64748b; font-size:14px; line-height:1.45; margin:0; }
+.dc-sigla { align-items:center; background:#eef2f7; border-radius:11px; color:#475569; display:flex; flex:none; font-size:12px; font-weight:700; height:38px; justify-content:center; width:38px; }
+.dc-sigla.sm { border-radius:10px; font-size:11px; height:34px; width:34px; }
+.dc-pill-kind { background:#eef2f7; border-radius:8px; color:#475569; flex:none; font-size:10px; font-weight:700; letter-spacing:.02em; padding:5px 8px; text-transform:uppercase; white-space:nowrap; }
+.dc-account { align-items:center; background:#f6f8fb; border:1px solid #e8edf4; border-radius:11px; display:flex; gap:8px; padding:10px 12px; }
+.dc-account>span { color:#0f172a; flex:1; font-size:12px; font-weight:600; overflow-wrap:anywhere; }
+.dc-account button { background:none; border:0; color:#2563eb; cursor:pointer; flex:none; font-size:11.5px; font-weight:700; }
+
+/* ── Carga masiva con la forma del diseño ── */
+.coord-phone .bulk-import { background:none; border:0; border-radius:0; gap:14px; padding:0; }
+.coord-phone .bulk-import>header { align-items:stretch; flex-direction:column; gap:10px; }
+.coord-phone .bulk-import h2 { color:#0f172a; font-size:13.5px; font-weight:700; letter-spacing:0; margin:0; }
+.coord-phone .bulk-import>header p:not(.eyebrow) { color:#64748b; font-size:11.5px; line-height:1.4; margin:0; }
+.coord-phone .bulk-import>header button { background:none; border:0; color:#2563eb; font-size:11.5px; font-weight:700; justify-content:flex-start; min-height:0; padding:0; }
+.coord-phone .bulk-sources { grid-template-columns:1fr; }
+.bulk-file,.bulk-paste-toggle { background:#f4f7ff; border:1.5px dashed #b9c8e0; border-radius:16px; gap:8px; min-height:0; padding:22px 16px; }
+.bulk-file svg,.bulk-paste-toggle svg { align-items:center; background:#fff; border-radius:12px; color:#1d4ed8; box-sizing:content-box; display:flex; height:20px; padding:11px; width:20px; }
+.bulk-file strong,.bulk-paste-toggle strong { color:#0f172a; font-size:13.5px; font-weight:700; }
+.bulk-file small,.bulk-paste-toggle small { color:#64748b; font-size:11.5px; line-height:1.4; }
+.bulk-paste { background:none; padding:0; }
+.bulk-paste label span { color:#64748b; font-size:11px; font-weight:700; letter-spacing:.07em; }
+.bulk-paste textarea { border:1px solid #dbe3ee; border-radius:13px; font-family:inherit; font-size:12.5px; line-height:1.5; min-height:74px; padding:12px; resize:none; }
+.bulk-summary { background:#f0fbf5; border:1px solid #cfe3d8; border-radius:13px; color:#065f46; font-size:11.5px; font-weight:600; line-height:1.4; padding:11px 12px; }
+.bulk-counts span { border-radius:8px; font-size:10.5px; font-weight:700; padding:5px 8px; }
+.bulk-counts .ok { background:#e7f6ef; color:#047857; }
+.bulk-counts .dup { background:#fff6e8; color:#b45309; }
+.bulk-counts .bad { background:#fdeaea; color:#b91c1c; }
+.bulk-table { border:0; border-radius:0; display:grid; gap:8px; max-height:none; overflow:visible; }
+.bulk-table table,.bulk-table thead { display:none; }
+.bulk-table tbody { display:grid; gap:8px; }
+.coord-phone .bulk-actions { flex-direction:column; }
+.coord-phone .bulk-actions .admin-submit { background:linear-gradient(135deg,#1d4ed8,#1e3a8a); border-radius:12px; box-shadow:0 14px 30px rgba(29,78,216,.32); font-size:14.5px; font-weight:700; min-height:50px; width:100%; }
+.bulk-clear { border:1px solid #dbe3ee; border-radius:11px; color:#0f172a; font-size:12px; font-weight:700; min-height:44px; }
+.approx { background:#fff7e6; border-radius:6px; color:#8b5708; display:inline-block; font-size:10.5px; font-weight:600; margin-top:3px; padding:2px 6px; }

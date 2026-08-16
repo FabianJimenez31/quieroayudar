@@ -4,8 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import UiIcon, { type IconName } from "./UiIcon";
 import { CATALOG, CATALOG_ITEMS } from "./catalog";
 import CentersMap from "./CentersMap";
+import HoaxesScreen from "./HoaxesScreen";
 import InitiativesScreen from "./InitiativesScreen";
-import { distanceKm, formatDistance, routeUrl } from "./geo";
+import { distanceKm, formatDistance, isApproximate, routeUrl } from "./geo";
 import type {
   Center,
   FieldReport,
@@ -34,6 +35,7 @@ type Screen =
   | "donante"
   | "donar"
   | "iniciativas"
+  | "bulos"
   | "done";
 
 type DoneKind = "productos" | "recibido" | "manos" | "saturado" | "donar" | "voluntario";
@@ -52,6 +54,24 @@ type Commitment = {
 type RouteHint = { name: string; address: string; url: string };
 
 const EMPTY: Network = { centers: [], needs: [], volunteerRequests: [], reports: [] };
+
+/** Sigla de dos letras para la ficha de cada tarea, como en el diseño. */
+function initials(label: string): string {
+  const words = label.split(/\s+/).filter((word) => word.length > 2);
+  const first = words[0]?.[0] ?? label[0] ?? "";
+  const second = words[1]?.[0] ?? words[0]?.[1] ?? "";
+  return (first + second).toUpperCase();
+}
+
+/** "hace 12 min" — el diseño fecha cada reporte para saber si sigue vigente. */
+function since(value: string): string {
+  const minutes = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 60000));
+  if (minutes < 1) return "ahora";
+  if (minutes < 60) return `hace ${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `hace ${hours} h`;
+  return `hace ${Math.round(hours / 24)} d`;
+}
 
 /**
  * Cada pantalla tiene su propia entrada de historial. Sin esto, el botón atrás de Android
@@ -72,6 +92,7 @@ const SCREEN_QUERY: Record<Screen, string> = {
   donante: "donar",
   donar: "comprometer",
   iniciativas: "iniciativas-empresas",
+  bulos: "noticias-falsas",
   done: "listo",
 };
 
@@ -267,6 +288,8 @@ function buildPulse(network: Network, position: Position | null) {
     delivered,
     promised,
     goal,
+    urgent: missing.filter((row) => row.need.status === "urgent").length,
+    handsWanted: wanted.reduce((sum, row) => sum + row.missing, 0),
     missing: missing.slice(0, 3),
     working: working.slice(0, 3),
     wanted: wanted.slice(0, 3),
@@ -809,25 +832,31 @@ export default function RedApoyoApp() {
     window.history.back();
   }
 
+  // El subtítulo de la pantalla de compromiso nombra el producto, así que la
+  // necesidad hay que resolverla antes de armar las cabeceras.
+  const pledgeNeedName = network.needs.find((need) => need.id === pledgeNeedId)?.name ?? "";
+
   const HEADERS: Partial<Record<Screen, [string, string]>> = {
-    afectado: ["Zona afectada", city || "Indica dónde estás"],
+    afectado: ["Zona afectada", "Tus reportes se publican al instante"],
     acopio: [
       myCenter?.name ?? "Centro de acopio",
       myCenter ? `${myCenter.address} · ${myCenter.city}` : "Elige tu centro",
     ],
     tutorial: ["Cómo funciona", "Cuatro caminos, ninguno pide registro"],
     productos: ["Productos", role === "acopio" ? "Marca estado y meta" : "Marca el estado de cada uno"],
+    done: ["Listo", "Guarda la referencia"],
     recibido: ["Registrar lo que llegó", myCenter?.name ?? "Elige tu centro"],
-    manos: ["Solicitar manos", "Se avisa a voluntarios cercanos"],
-    saturado: ["Marcar saturación", role === "acopio" ? myCenter?.name ?? "Elige tu centro" : city || "Zona afectada"],
-    personas: ["Persona encontrada", "Atención de emergencias"],
+    manos: ["Pedir manos", "Una tarea por solicitud"],
+    saturado: ["Reportar saturación", role === "acopio" ? myCenter?.name ?? "Elige tu centro" : city || "Zona afectada"],
+    personas: ["Persona herida", "Atención de emergencias"],
     logistica: [
-      "¿Dónde hago falta?",
-      `${network.centers.filter((item) => item.status === "active").length} centros activos`,
+      "Dónde faltan manos",
+      "Ordenado por necesidad, no por cercanía",
     ],
-    donante: ["Se necesita ahora", "Priorizado por los centros"],
-    donar: ["Comprometer donación", "Reserva por 6 horas"],
-    iniciativas: ["Iniciativas corporativas", "Empresas con canal abierto para donar"],
+    donante: ["Se necesita ahora", "Urgencia primero, luego cercanía"],
+    donar: ["Comprometer donación", pledgeNeedName || "Reserva por 6 horas"],
+    iniciativas: ["Empresas que donan", "Cada botón lleva al canal oficial"],
+    bulos: ["Noticias falsas", "Verificadas y desmentidas"],
   };
   const header = HEADERS[screen];
 
@@ -840,7 +869,6 @@ export default function RedApoyoApp() {
     saturado: role === "acopio" ? "Marcar mi centro como saturado" : "Publicar alerta",
     // Sin necesidad no hay nada que comprometer: un botón inerte es peor que ninguno.
     donar: pledgeNeed ? "Comprometer donación" : undefined,
-    done: "Volver al inicio",
   };
   const cta = CTA_LABELS[screen];
 
@@ -873,8 +901,8 @@ export default function RedApoyoApp() {
             { label: "Yo", icon: "users", target: "roles" },
           ];
 
-  const showTabs =
-    role !== null && ["afectado", "acopio", "logistica", "donante", "iniciativas"].includes(screen);
+  // El rediseño navega solo con el botón atrás de la cabecera, sin barra inferior.
+  const showTabs = false;
 
   /* ───────── Datos derivados ───────── */
 
@@ -951,6 +979,7 @@ export default function RedApoyoApp() {
             role={role}
             onPick={chooseRole}
             onTutorial={() => navigate("tutorial")}
+            onHoaxes={() => navigate("bulos")}
             onInitiatives={() => navigate("iniciativas")}
             onMap={() => {
               setPointsView("mapa");
@@ -1037,7 +1066,7 @@ export default function RedApoyoApp() {
           />
         )}
 
-        {screen === "personas" && <PeopleScreen />}
+        {screen === "personas" && <PeopleScreen onBack={goBack} />}
 
         {screen === "logistica" && (
           <LogisticsScreen
@@ -1094,7 +1123,9 @@ export default function RedApoyoApp() {
 
         {screen === "iniciativas" && <InitiativesScreen onFlash={flash} />}
 
-        {screen === "done" && <DoneScreen kind={doneKind} body={doneBody} note={doneNote} route={doneRoute} />}
+        {screen === "bulos" && <HoaxesScreen />}
+
+        {screen === "done" && <DoneScreen kind={doneKind} body={doneBody} note={doneNote} route={doneRoute} onHome={() => navigate(home)} />}
       </main>
 
       {cta && (
@@ -1139,6 +1170,7 @@ function HomeScreen(props: {
   role: Role | null;
   onPick: (role: Role) => void;
   onTutorial: () => void;
+  onHoaxes: () => void;
   onInitiatives: () => void;
   onMap: () => void;
   onNeeds: () => void;
@@ -1146,33 +1178,33 @@ function HomeScreen(props: {
 }) {
   const { pulse } = props;
   const saved = ROLES.find((item) => item.id === props.role);
-  const where = (center: Center) =>
-    `${center.name} · ${center.city}${
-      props.position ? ` · a ${formatDistance(distanceKm(props.position, center))}` : ""
-    }`;
+  const percent = pulse.goal > 0 ? Math.min(100, Math.round((pulse.delivered / pulse.goal) * 100)) : 0;
+  const list = (values: string[]) =>
+    Array.from(new Set(values)).slice(0, 3).join(", ");
 
   return (
-    <section className="roles">
+    <section className="dc-body" style={{ padding: "22px 2px 34px", gap: 18 }}>
       <span className="mark" aria-hidden="true"><UiIcon name="location" size={26} /></span>
-      <h1>¿Cómo estás<br />ayudando hoy?</h1>
-      <p className="lead-text">Entra sin registro. Puedes cambiar de rol cuando quieras.</p>
+      <div style={{ display: "grid", gap: 8 }}>
+        <h1 className="dc-title">¿Cómo estás ayudando hoy?</h1>
+        <p className="dc-lead">Entra sin registro. Puedes cambiar de rol cuando quieras.</p>
+      </div>
 
       {/*
-        Atajos a lo que sirve sin haber elegido rol todavía: ver dónde están los
-        puntos, qué se está pidiendo y qué empresas están recibiendo donaciones.
-        No fijan rol a propósito: mirar no es comprometerse.
+        Atajos a lo que sirve sin haber elegido rol todavía. No fijan rol a
+        propósito: mirar no es comprometerse.
       */}
       <nav className="shortcuts" aria-label="Accesos directos">
         <button type="button" onClick={props.onMap}>
-          <span><UiIcon name="location" size={22} /></span>
+          <span><UiIcon name="location" size={18} /></span>
           Mapa de puntos
         </button>
         <button type="button" onClick={props.onNeeds}>
-          <span><UiIcon name="alert" size={22} /></span>
+          <span><UiIcon name="alert" size={18} /></span>
           Se necesita ahora
         </button>
         <button type="button" onClick={props.onInitiatives}>
-          <span><UiIcon name="reports" size={22} /></span>
+          <span><UiIcon name="reports" size={18} /></span>
           Empresas que donan
         </button>
       </nav>
@@ -1184,7 +1216,7 @@ function HomeScreen(props: {
             <strong>Seguir como {saved.title.toLowerCase()}</strong>
             <small>Retomas donde ibas, con tu centro y tus marcas</small>
           </span>
-          <UiIcon name="arrow-right" size={20} />
+          <UiIcon name="arrow-right" size={19} />
         </button>
       )}
 
@@ -1196,128 +1228,79 @@ function HomeScreen(props: {
               <strong>{role.title}</strong>
               <small>{role.text}</small>
             </span>
-            <UiIcon name="arrow-right" size={20} />
+            <UiIcon name="arrow-right" size={18} />
           </button>
         ))}
 
-        {/*
-          Alta de centros: quien coordina un acopio entra al panel completo, donde
-          puede registrar uno a uno o subir el listado entero en Excel. Va aquí,
-          entre las cajas de inicio, porque llega gente con la lista ya hecha.
-        */}
         <a className="row-card coord-entry" href="/coordinar">
           <span className="code">CA</span>
           <span className="copy">
             <strong>Registrar centros de acopio</strong>
-            <small>Panel de coordinación: alta individual o carga masiva por Excel</small>
+            <small>Panel de coordinación · alta individual o carga masiva</small>
           </span>
-          <UiIcon name="arrow-right" size={20} />
+          <UiIcon name="arrow-right" size={18} />
         </a>
       </div>
 
       <button type="button" className="ghost-row" onClick={props.onTutorial}>
-        <UiIcon name="alert" size={18} />
+        <UiIcon name="alert" size={17} />
         ¿Es tu primera vez? Mira cómo funciona en un minuto
       </button>
 
-      <section className="pulse">
-        <h2>Ahora mismo</h2>
-        <div className="figures">
+      <button type="button" className="ghost-row" onClick={props.onHoaxes}>
+        <UiIcon name="close" size={17} />
+        Noticias falsas que están circulando
+      </button>
+
+      <section style={{ display: "grid", gap: 10, paddingTop: 4 }}>
+        <h2 className="dc-h" style={{ fontSize: "15px", margin: 0 }}>Ahora mismo</h2>
+
+        <div className="dc-stats">
           <div><strong>{pulse.centers}</strong><small>puntos activos</small></div>
           <div><strong>{pulse.cities}</strong><small>ciudades</small></div>
           <div><strong>{pulse.hands}</strong><small>manos en terreno</small></div>
         </div>
 
-        <article className="pulse-card">
-          <h3><UiIcon name="package" size={17} />Se necesita ahora</h3>
-          {pulse.missing.length === 0 ? (
-            <PulseEmpty
-              text="Ningún centro ha publicado qué le falta."
-              action="Atiendo un centro y quiero publicarlo"
-              onAction={() => props.onPick("acopio")}
-            />
-          ) : (
-            <ul>
-              {pulse.missing.map((row) => (
-                <li key={row.need.id}>
-                  <strong>
-                    {row.missing} {row.need.unit} de {row.need.name}
-                  </strong>
-                  <small>{where(row.center)}</small>
-                </li>
-              ))}
-            </ul>
-          )}
-        </article>
+        {/* Cuatro datos, uno por tarjeta: la rejilla se lee de un vistazo. */}
+        <div className="dc-tiles">
+          <article className="dc-card sm">
+            <span className="dc-eyebrow soft">Qué falta</span>
+            <strong className="dc-h" style={{ fontSize: "13px", lineHeight: 1.3 }}>
+              {pulse.missing.length > 0 ? list(pulse.missing.map((row) => row.need.name)) : "Nada publicado"}
+            </strong>
+            <span style={{ color: "#dc2626", fontSize: "11px", fontWeight: 500 }}>
+              {pulse.urgent} urgencias abiertas
+            </span>
+          </article>
 
-        <article className="pulse-card">
-          <h3><UiIcon name="check" size={17} />Lo que ya se logró</h3>
-          {pulse.goal === 0 ? (
-            <PulseEmpty
-              text="Todavía no hay metas publicadas que medir."
-              action="Publicar lo que necesita mi centro"
-              onAction={() => props.onPick("acopio")}
-            />
-          ) : (
-            <>
-              <p className="big">
-                {pulse.delivered} <span>de {pulse.goal} entregados</span>
-              </p>
-              <div className="bar" role="img" aria-label={`${pulse.delivered} de ${pulse.goal} entregados`}>
-                <i style={{ width: `${Math.min(100, Math.round((pulse.delivered / pulse.goal) * 100))}%` }} />
-              </div>
-              <small>
-                {pulse.promised > 0
-                  ? `${pulse.promised} más van en camino, ya prometidos por donantes.`
-                  : "Cuenta solo lo que los centros confirmaron haber recibido."}
-              </small>
-            </>
-          )}
-        </article>
+          <article className="dc-card sm">
+            <span className="dc-eyebrow soft">Cuánto se entregó</span>
+            <strong className="dc-h" style={{ fontSize: "13px", lineHeight: 1.3 }}>
+              {pulse.goal > 0 ? `${percent}% de lo pedido` : "Sin metas aún"}
+            </strong>
+            <span className="dc-bar"><i style={{ background: "#059669", width: `${percent}%` }} /></span>
+          </article>
 
-        <article className="pulse-card">
-          <h3><UiIcon name="users" size={17} />Quién está trabajando</h3>
-          {pulse.working.length === 0 ? (
-            <PulseEmpty
-              text="Nadie se ha apuntado todavía a una tarea."
-              action="Puedo ir a echar una mano"
-              onAction={() => props.onPick("logistica")}
-            />
-          ) : (
-            <ul>
-              {pulse.working.map((row) => (
-                <li key={row.request.id}>
-                  <strong>
-                    {row.request.accepted} {row.request.accepted === 1 ? "persona" : "personas"} en {row.request.kind}
-                  </strong>
-                  <small>{where(row.center)}</small>
-                </li>
-              ))}
-            </ul>
-          )}
-        </article>
+          <article className="dc-card sm">
+            <span className="dc-eyebrow soft">Quién trabaja</span>
+            <strong className="dc-h" style={{ fontSize: "13px", lineHeight: 1.3 }}>
+              {pulse.working.length} centros reportando
+            </strong>
+            <span style={{ color: "#64748b", fontSize: "11px", fontWeight: 500 }}>
+              {pulse.hands} personas en terreno
+            </span>
+          </article>
 
-        <article className="pulse-card">
-          <h3><UiIcon name="alert" size={17} />Dónde faltan manos</h3>
-          {pulse.wanted.length === 0 ? (
-            <PulseEmpty
-              text="Ningún centro ha pedido voluntarios."
-              action="Atiendo un centro y necesito gente"
-              onAction={() => props.onPick("acopio")}
-            />
-          ) : (
-            <ul>
-              {pulse.wanted.map((row) => (
-                <li key={row.request.id}>
-                  <strong>
-                    Faltan {row.missing} para {row.request.kind}
-                  </strong>
-                  <small>{where(row.center)}</small>
-                </li>
-              ))}
-            </ul>
-          )}
-        </article>
+          <article className="dc-card sm">
+            <span className="dc-eyebrow soft">Dónde faltan manos</span>
+            <strong className="dc-h" style={{ fontSize: "13px", lineHeight: 1.3 }}>
+              {pulse.wanted.length > 0 ? list(pulse.wanted.map((row) => row.center.city)) : "Sin solicitudes"}
+            </strong>
+            <span style={{ color: "#d97706", fontSize: "11px", fontWeight: 500 }}>
+              {pulse.handsWanted} personas pedidas
+            </span>
+          </article>
+        </div>
       </section>
 
       {/*
@@ -1337,15 +1320,6 @@ function HomeScreen(props: {
   );
 }
 
-/** Un hueco vacío que propone la acción que lo llenaría, en vez de dar lástima. */
-function PulseEmpty(props: { text: string; action: string; onAction: () => void }) {
-  return (
-    <div className="pulse-empty">
-      <p>{props.text}</p>
-      <button type="button" onClick={props.onAction}>{props.action}</button>
-    </div>
-  );
-}
 
 const TUTORIAL: { role: Role; title: string; steps: string[] }[] = [
   {
@@ -1434,56 +1408,71 @@ function AffectedHome(props: {
 }) {
   const nearby = props.reports.filter((report) => !props.city || report.city === props.city).slice(0, 3);
   return (
-    <>
-      <section className="place-card">
-        <span className="eyebrow">¿Dónde estás?</span>
-        <label>
-          <span>Ciudad o municipio</span>
-          <input
-            list="ciudades-conocidas"
-            value={props.city}
-            onChange={(event) => props.onCity(event.target.value)}
-            autoComplete="address-level2"
-            placeholder="Ej. Bogotá"
-          />
-          <datalist id="ciudades-conocidas">
-            {props.cities.map((city) => <option key={city} value={city} />)}
-          </datalist>
-        </label>
-        <label>
-          <span>Barrio o referencia <small>opcional</small></span>
-          <div className="with-button">
-            <input
-              value={props.reference}
-              onChange={(event) => props.onReference(event.target.value)}
-              placeholder={props.gpsLabel || "Barrio, vereda o punto conocido"}
-            />
-            <button type="button" onClick={props.onLocate} disabled={props.locating} aria-label="Usar mi ubicación">
-              <UiIcon name="location" size={19} />
-            </button>
-          </div>
-        </label>
+    <div className="dc-body">
+      <section className="dc-card">
+        <span className="dc-eyebrow">Dónde estás</span>
+        <input
+          className="dc-input"
+          list="ciudades-conocidas"
+          value={props.city}
+          onChange={(event) => props.onCity(event.target.value)}
+          autoComplete="address-level2"
+          placeholder="Escribe tu ciudad"
+          aria-label="Ciudad o municipio"
+        />
+        <datalist id="ciudades-conocidas">
+          {props.cities.map((city) => <option key={city} value={city} />)}
+        </datalist>
+        <input
+          className="dc-input"
+          value={props.reference}
+          onChange={(event) => props.onReference(event.target.value)}
+          placeholder="Barrio o vereda (opcional)"
+          aria-label="Barrio o referencia"
+        />
+        <button type="button" className="dc-dashed" onClick={props.onLocate} disabled={props.locating}>
+          {props.locating ? "Buscando tu ubicación…" : props.gpsLabel || "Usar mi ubicación GPS"}
+        </button>
       </section>
 
-      <div className="stack">
-        <ActionRow icon="package" title="Productos que necesitamos" text="Marca urgente, se necesita o ya hay" onClick={props.onProducts} />
-        <ActionRow icon="users" title="Solicitar manos" text="Escombros, médicos, cocina, conductores" onClick={props.onHands} />
-        <ActionRow icon="alert" title="Reportar saturación" text="Que dejen de llegar a este punto" onClick={props.onSaturation} />
-        <ActionRow icon="reports" title="Persona herida o atrapada" text="Atención oficial de emergencias" onClick={props.onPeople} tag="123" />
+      <p className="dc-h">Qué quieres reportar</p>
+      <div className="dc-tiles">
+        <button type="button" className="dc-tile" onClick={props.onProducts}>
+          <span><UiIcon name="package" size={18} /></span>
+          <strong>Productos que faltan</strong>
+        </button>
+        <button type="button" className="dc-tile" onClick={props.onHands}>
+          <span><UiIcon name="users" size={18} /></span>
+          <strong>Pedir manos</strong>
+        </button>
+        <button type="button" className="dc-tile warn" onClick={props.onSaturation}>
+          <span><UiIcon name="alert" size={18} /></span>
+          <strong>Centro saturado</strong>
+        </button>
+        <button type="button" className="dc-tile danger" onClick={props.onPeople}>
+          <span><UiIcon name="reports" size={18} /></span>
+          <strong>Persona herida</strong>
+        </button>
       </div>
 
       {nearby.length > 0 && (
-        <section className="feed">
-          <h2>Publicado desde el terreno</h2>
+        <section className="dc-body" style={{ gap: 8, padding: 0 }}>
+          <div className="dc-kv">
+            <strong className="dc-h">Reportes de tu ciudad</strong>
+            <span className="dc-sub">{props.city || "Todas"}</span>
+          </div>
           {nearby.map((report) => (
-            <article key={report.id}>
-              <strong>{report.location}</strong>
-              <p>{report.details}</p>
+            <article className="dc-card sm" key={report.id}>
+              <div className="dc-kv">
+                <strong style={{ fontSize: "12.5px", lineHeight: 1.3 }}>{report.location}</strong>
+                <span style={{ color: "#94a3b8", fontSize: "10.5px", fontWeight: 500 }}>{since(report.createdAt)}</span>
+              </div>
+              <p className="dc-sub" style={{ margin: 0 }}>{report.details}</p>
             </article>
           ))}
         </section>
       )}
-    </>
+    </div>
   );
 }
 
@@ -1667,45 +1656,52 @@ function ProductsScreen(props: {
 
   return (
     <>
-      <div className="counters">
-        <span className="pill urgent">{props.urgentCount} urgentes</span>
-        <span className="pill ok">{props.blockedCount} suficientes</span>
+      <div className="dc-subhead">
+        <input
+          className="dc-input sm"
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Buscar producto"
+          aria-label="Buscar un producto"
+        />
       </div>
-      <SearchBox value={query} onValue={setQuery} label="Buscar un producto" icon="package" />
-      <p className="lead-text">“Ya hay” evita que otros lleven algo que ya está cubierto.</p>
-      {groups.length === 0 && <p className="empty">Ningún producto coincide con “{query}”.</p>}
-      {groups.map((section) => (
-        <section className="group" key={section.group}>
-          <h2>{section.group}</h2>
-          {section.items.map((item) => {
-            const level = props.levels[item.name] ?? "normal";
-            const target = props.targets[item.name] ?? item.start;
-            return (
-              <article className={`product ${level}`} key={item.name}>
-                <strong>{item.name}</strong>
-                <div className="states" role="group" aria-label={`Estado de ${item.name}`}>
-                  <button type="button" aria-pressed={level === "urgent"} onClick={() => props.onLevel(item.name, "urgent")}>Urgente</button>
-                  <button type="button" aria-pressed={level === "normal"} onClick={() => props.onLevel(item.name, "normal")}>Se necesita</button>
-                  <button type="button" aria-pressed={level === "blocked"} onClick={() => props.onLevel(item.name, "blocked")}>Ya hay</button>
-                </div>
-                {props.withTargets && level !== "blocked" && (
-                  <div className="stepper small">
-                    <span>Meta</span>
-                    <button type="button" aria-label={`Reducir meta de ${item.name}`} onClick={() => props.onTarget(item.name, Math.max(1, target - item.step))}>
-                      <UiIcon name="minus" size={18} />
-                    </button>
-                    <strong aria-live="polite">{target}</strong>
-                    <button type="button" aria-label={`Aumentar meta de ${item.name}`} onClick={() => props.onTarget(item.name, Math.min(100000, target + item.step))}>
-                      <UiIcon name="plus" size={18} />
-                    </button>
-                    <small>{item.unit}</small>
+
+      <div className="dc-body wide-gap" style={{ padding: "14px 0 20px" }}>
+        {groups.length === 0 && <p className="empty">Ningún producto coincide con “{query}”.</p>}
+        {groups.map((section) => (
+          <section style={{ display: "grid", gap: 8 }} key={section.group}>
+            <span className="dc-eyebrow">{section.group}</span>
+            {section.items.map((item) => {
+              const level = props.levels[item.name] ?? "normal";
+              const target = props.targets[item.name] ?? item.start;
+              return (
+                <article className="dc-card sm" key={item.name} style={{ gap: 10 }}>
+                  <div className="dc-kv" style={{ alignItems: "center", gap: 8 }}>
+                    <strong style={{ fontSize: "13.5px", lineHeight: 1.2 }}>{item.name}</strong>
+                    <span style={{ color: "#94a3b8", fontSize: "11px", fontWeight: 500 }}>{item.unit}</span>
                   </div>
-                )}
-              </article>
-            );
-          })}
-        </section>
-      ))}
+                  <div className="dc-states" role="group" aria-label={`Estado de ${item.name}`}>
+                    <button type="button" aria-pressed={level === "urgent"} onClick={() => props.onLevel(item.name, "urgent")}>Urgente</button>
+                    <button type="button" aria-pressed={level === "normal"} onClick={() => props.onLevel(item.name, "normal")}>Se necesita</button>
+                    <button type="button" aria-pressed={level === "blocked"} onClick={() => props.onLevel(item.name, "blocked")}>Ya hay</button>
+                  </div>
+                  {props.withTargets && level !== "blocked" && (
+                    <div className="dc-step-row">
+                      <span>Meta para tu centro</span>
+                      <div className="dc-step sm">
+                        <button type="button" aria-label={`Reducir meta de ${item.name}`} onClick={() => props.onTarget(item.name, Math.max(1, target - item.step))}>−</button>
+                        <strong aria-live="polite">{target}</strong>
+                        <button type="button" className="plus" aria-label={`Aumentar meta de ${item.name}`} onClick={() => props.onTarget(item.name, Math.min(100000, target + item.step))}>+</button>
+                      </div>
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </section>
+        ))}
+      </div>
     </>
   );
 }
@@ -1777,38 +1773,36 @@ function HandsScreen(props: {
   onQuantity: (value: number) => void;
 }) {
   return (
-    <>
-      <p className="lead-text">Elige una sola tarea para que sepan exactamente a qué van.</p>
-      <div className="stack">
+    <div className="dc-body wide-gap">
+      <div style={{ display: "grid", gap: 8 }}>
+        <span className="dc-eyebrow">Tarea</span>
         {HAND_OPTIONS.map((option) => (
           <button
             key={option.id}
             type="button"
-            className={`pick-card${props.kind === option.id ? " on" : ""}`}
+            className={`dc-pick${props.kind === option.id ? " on" : ""}`}
             aria-pressed={props.kind === option.id}
             onClick={() => props.onKind(option.id)}
           >
-            <span className="radio" aria-hidden="true">{props.kind === option.id && <UiIcon name="check" size={14} />}</span>
-            <span className="copy">
-              <strong>{option.id}</strong>
-              <small>{option.detail}</small>
-            </span>
+            <span className="sigla">{initials(option.id)}</span>
+            <strong>{option.id}</strong>
+            {props.kind === option.id && <span className="check"><UiIcon name="check" size={14} /></span>}
           </button>
         ))}
       </div>
-      <section className="stepper-card">
-        <span>¿Cuántas personas necesitas?</span>
-        <div className="stepper">
-          <button type="button" aria-label="Restar una persona" onClick={() => props.onQuantity(Math.max(1, props.quantity - 1))}>
-            <UiIcon name="minus" size={20} />
-          </button>
+
+      <section className="dc-card">
+        <span className="dc-h" style={{ fontSize: "13px" }}>¿Cuántas personas?</span>
+        <div className="dc-step">
+          <button type="button" aria-label="Restar una persona" onClick={() => props.onQuantity(Math.max(1, props.quantity - 1))}>−</button>
           <strong aria-live="polite">{props.quantity}</strong>
-          <button type="button" aria-label="Sumar una persona" onClick={() => props.onQuantity(Math.min(60, props.quantity + 1))}>
-            <UiIcon name="plus" size={20} />
-          </button>
+          <button type="button" className="plus" aria-label="Sumar una persona" onClick={() => props.onQuantity(Math.min(60, props.quantity + 1))}>+</button>
         </div>
+        <p style={{ color: "#94a3b8", fontSize: "11px", lineHeight: 1.3, margin: 0, textAlign: "center" }}>
+          Entre 1 y 60 personas
+        </p>
       </section>
-    </>
+    </div>
   );
 }
 
@@ -1820,63 +1814,74 @@ function SaturationScreen(props: {
   position: Position | null;
 }) {
   return (
-    <>
-      <p className="lead-text">Dejamos de enviar gente aquí y sugerimos los puntos con menos cobertura.</p>
-      <div className="stack">
+    <div className="dc-body wide-gap">
+      <div style={{ display: "grid", gap: 8 }}>
+        <span className="dc-eyebrow">Motivo</span>
         {SATURATION_OPTIONS.map((option) => (
           <button
             key={option.id}
             type="button"
-            className={`pick-card${props.reason === option.id ? " on" : ""}`}
+            className={`dc-pick radio${props.reason === option.id ? " on" : ""}`}
             aria-pressed={props.reason === option.id}
             onClick={() => props.onReason(option.id)}
           >
-            <span className="radio" aria-hidden="true">{props.reason === option.id && <UiIcon name="check" size={14} />}</span>
-            <span className="copy">
-              <strong>{option.id}</strong>
-              <small>{option.detail}</small>
-            </span>
+            <span className="dot" aria-hidden="true"><i /></span>
+            <strong>{option.id}</strong>
           </button>
         ))}
       </div>
+
       {props.alternatives.length > 0 && (
-        <section className="feed">
-          <h2>Redirigir gente hacia</h2>
+        <div style={{ display: "grid", gap: 8 }}>
+          <p className="dc-h" style={{ fontSize: "13.5px", margin: 0 }}>Lleva lo que traías a estos centros</p>
           {props.alternatives.map((center) => {
-            const missing = props.needs.filter(
+            const urgent = props.needs.filter(
               (need) => need.centerId === center.id && need.status === "urgent",
             ).length;
             return (
-              <article key={center.id}>
-                <strong>{center.name}</strong>
-                <p>
-                  {missing > 0 ? `${missing} productos urgentes` : "Recibiendo ayuda"}
-                  {props.position ? ` · ${formatDistance(distanceKm(props.position, center))}` : ""}
+              <article className="dc-card sm" key={center.id} style={{ gap: 8 }}>
+                <div className="dc-kv" style={{ alignItems: "flex-start", gap: 8 }}>
+                  <strong style={{ fontSize: "13px", lineHeight: 1.25 }}>{center.name}</strong>
+                  {props.position && (
+                    <span style={{ color: "#2563eb", flex: "none", fontSize: "11px", fontWeight: 600 }}>
+                      {formatDistance(distanceKm(props.position, center))}
+                    </span>
+                  )}
+                </div>
+                <p className="dc-sub" style={{ margin: 0 }}>
+                  {urgent > 0 ? `Urgente: ${urgent} productos` : "Recibiendo ayuda"}
                 </p>
+                <a className="dc-ghost" style={{ display: "block", textAlign: "center", textDecoration: "none" }}
+                   href={routeUrl(center)} target="_blank" rel="noreferrer">Ver ruta</a>
               </article>
             );
           })}
-        </section>
+        </div>
       )}
-    </>
+    </div>
   );
 }
 
-function PeopleScreen() {
+function PeopleScreen({ onBack }: { onBack: () => void }) {
   return (
-    <section className="people">
-      <span className="mark alert" aria-hidden="true"><UiIcon name="alert" size={26} /></span>
-      <h2>Esto no se publica aquí</h2>
-      <p>
-        Los datos de personas heridas, atrapadas o desaparecidas no son públicos y no se registran
-        en esta aplicación. Llama directamente a los organismos oficiales: son los únicos que pueden
-        contactar a las familias.
-      </p>
-      <a className="call" href="tel:123">Llamar al 123</a>
-      <p className="fineprint">
-        Defensa Civil, Cruz Roja y Bomberos responden por esa línea. Esta plataforma no reemplaza la
-        atención de emergencias.
-      </p>
+    <section className="dc-emergency">
+      <button type="button" className="dc-back" onClick={onBack} aria-label="Volver">
+        <UiIcon name="arrow-left" size={19} />
+      </button>
+      <div style={{ display: "grid", gap: 12, paddingTop: 30 }}>
+        <h2>Una persona herida no se reporta por la app</h2>
+        <p>
+          Llama al 123. Es la única vía que activa una ambulancia. Nadie en esta plataforma puede
+          atender una emergencia médica.
+        </p>
+      </div>
+      <a className="dc-call" href="tel:123">
+        <strong>123</strong>
+        <small>Llamar ahora</small>
+      </a>
+      <aside>
+        Si ya llamaste y el centro necesita insumos médicos, vuelve y publícalos como producto urgente.
+      </aside>
     </section>
   );
 }
@@ -1892,7 +1897,6 @@ function LogisticsScreen(props: {
   onView: (value: "lista" | "mapa") => void;
   onAccept: (item: VolunteerRequest) => void;
 }) {
-  const [query, setQuery] = useState("");
   const [city, setCity] = useState("");
 
   const cities = useMemo(
@@ -1900,99 +1904,97 @@ function LogisticsScreen(props: {
     [props.centers],
   );
 
-  // Filtrar aquí y no dentro del mapa: el mapa recibe la misma lista ya recortada
-  // y así los dos modos enseñan exactamente lo mismo.
-  const shown = useMemo(() => {
-    const key = norm(query);
-    return props.centers.filter(
-      (center) =>
-        (!city || center.city === city) &&
-        (!key || norm(`${center.name} ${center.city} ${center.address}`).includes(key)),
-    );
-  }, [props.centers, query, city]);
+  const shown = useMemo(
+    () => props.centers.filter((center) => !city || center.city === city),
+    [props.centers, city],
+  );
 
-  if (props.loading) return <p className="empty">Sincronizando…</p>;
-  if (props.centers.length === 0) return <p className="empty">Todavía no hay centros publicados.</p>;
   return (
     <>
-      <ViewSwitch view={props.view} onView={props.onView} />
-      <SearchBox value={query} onValue={setQuery} label="Buscar punto o ciudad" icon="building" />
-      <CityChips cities={cities} value={city} onValue={setCity} />
-      {shown.length === 0 && <p className="empty">Ningún punto coincide con lo que buscas.</p>}
-      {props.view === "mapa" ? (
-        <>
-          <p className="lead-text">
-            Toca un punto para ver qué le falta y abrir la ruta. El punto azul eres tú.
-          </p>
+      <div className="dc-subhead">
+        <div className="dc-chips">
+          <button type="button" aria-pressed={city === ""} onClick={() => setCity("")}>Todas</button>
+          {cities.map((name) => (
+            <button key={name} type="button" aria-pressed={city === name} onClick={() => setCity(name)}>{name}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="dc-body tight" style={{ padding: "14px 0 24px" }}>
+        <div className="dc-toggle" style={{ alignSelf: "flex-start" }} role="group" aria-label="Ver como">
+          <button type="button" aria-pressed={props.view === "lista"} onClick={() => props.onView("lista")}>Lista</button>
+          <button type="button" aria-pressed={props.view === "mapa"} onClick={() => props.onView("mapa")}>Mapa</button>
+        </div>
+
+        {props.view === "mapa" && (
           <CentersMap
             centers={shown}
             needs={props.needs}
             requests={props.requests}
             position={props.position}
           />
-        </>
-      ) : (
-        <>
-      <p className="lead-text">Ordenado por necesidad real, no por cercanía. Los saturados quedan al final.</p>
-      <div className="stack">
+        )}
+
+        {props.loading && <p className="empty">Sincronizando…</p>}
+        {!props.loading && shown.length === 0 && <p className="empty">No hay puntos en esa ciudad.</p>}
+
         {shown.map((center) => {
           const open = props.requests.filter(
             (item) => item.centerId === center.id && item.status === "open" && item.accepted < item.quantity,
           );
-          const saturated = center.status === "saturated";
-          const full = Boolean(center.volunteersSaturated);
+          const first = open[0];
+          const missing = open.reduce((total, item) => total + (item.quantity - item.accepted), 0);
+          const full = center.volunteersSaturated || center.status === "saturated";
           return (
-            <article className={`center-card${saturated ? " sat" : ""}`} key={center.id}>
-              <div className="center-top">
-                <strong>{center.name}</strong>
-                {props.position && <span className="dist">{formatDistance(distanceKm(props.position, center))}</span>}
+            <article className="dc-card" key={center.id} style={{ opacity: full ? 0.72 : 1 }}>
+              <div className="dc-kv" style={{ alignItems: "flex-start", gap: 10 }}>
+                <span style={{ display: "grid", flex: 1, gap: 3, minWidth: 0 }}>
+                  <strong style={{ fontSize: "13.5px", lineHeight: 1.25 }}>{center.name}</strong>
+                  <span className="dc-sub">
+                    {center.city}
+                    {props.position ? ` · ${formatDistance(distanceKm(props.position, center))}` : ""}
+                  </span>
+                  {isApproximate(center) && (
+                    <span className="approx">Ubicación aproximada · confirma la dirección</span>
+                  )}
+                </span>
+                <span className={`dc-tag ${full ? "ok" : missing > 5 ? "urgent" : "warn"}`}>
+                  {full ? "Lleno" : missing > 5 ? "Falta apoyo" : "Casi listo"}
+                </span>
               </div>
-              <small>{center.address} · {center.city}</small>
-              {saturated ? (
-                <p className="note warn">Saturado. No te dirijas aquí.</p>
-              ) : full ? (
-                <p className="note">Ya tienen suficientes voluntarios.</p>
-              ) : open.length === 0 ? (
-                <p className="note">Sin solicitudes abiertas ahora mismo.</p>
-              ) : (
-                open.map((item) => (
-                  <div className="request" key={item.id}>
-                    <div>
-                      <strong>{item.kind}</strong>
-                      <small>Faltan {item.quantity - item.accepted} personas</small>
-                    </div>
-                    <button type="button" disabled={props.busy} onClick={() => props.onAccept(item)}>Voy para allá</button>
-                  </div>
-                ))
-              )}
-              <a className="route" href={routeUrl(center)} target="_blank" rel="noreferrer">
-                Abrir ruta <UiIcon name="external" size={15} />
-              </a>
+              <p style={{ color: "#0f172a", fontSize: "12px", fontWeight: 600, lineHeight: 1.35, margin: 0 }}>
+                {first ? `${first.kind} · faltan ${first.quantity - first.accepted} personas` : "Sin cupo de voluntarios hoy"}
+              </p>
+              <div className="dc-row-actions">
+                <button
+                  type="button"
+                  className="dc-solid"
+                  disabled={!first || props.busy}
+                  style={!first ? { background: "#e2e8f0", color: "#94a3b8" } : undefined}
+                  onClick={() => first && props.onAccept(first)}
+                >
+                  {first ? "Me apunto" : "Sin cupo"}
+                </button>
+                <a className="dc-ghost flexnone" style={{ textDecoration: "none" }}
+                   href={routeUrl(center)} target="_blank" rel="noreferrer">Ruta</a>
+              </div>
             </article>
           );
         })}
       </div>
-        </>
-      )}
     </>
   );
 }
 
-/** Lista o mapa. La lista manda por defecto: pesa nada y funciona con mala señal. */
+/* Conmutador lista/mapa del selector de centro, con la forma del rediseño. */
 function ViewSwitch({
   view,
   onView,
 }: { view: "lista" | "mapa"; onView: (value: "lista" | "mapa") => void }) {
   return (
-    <div className="view-switch" role="group" aria-label="Forma de ver los puntos">
-      <button type="button" aria-pressed={view === "lista"} onClick={() => onView("lista")}>
-        <UiIcon name="reports" size={17} />
-        Lista
-      </button>
-      <button type="button" aria-pressed={view === "mapa"} onClick={() => onView("mapa")}>
-        <UiIcon name="location" size={17} />
-        Mapa
-      </button>
+    <div className="dc-toggle" style={{ alignSelf: "flex-start" }} role="group" aria-label="Forma de ver los puntos">
+      <button type="button" aria-pressed={view === "lista"} onClick={() => onView("lista")}>Lista</button>
+      <button type="button" aria-pressed={view === "mapa"} onClick={() => onView("mapa")}>Mapa</button>
     </div>
   );
 }
@@ -2055,76 +2057,83 @@ function DonorScreen(props: {
     });
   }, [props.needs, byId, query, city, onlyUrgent, props.position]);
 
-  const initiatives = (
-    <ActionRow
-      icon="reports"
-      title="Iniciativas corporativas para donar"
-      text="Kits en tienda, cuentas y cajeros de empresas"
-      onClick={props.onInitiatives}
-    />
-  );
-
   if (props.loading) return <p className="empty">Sincronizando…</p>;
-  if (props.needs.length === 0) {
-    return (
-      <>
-        {props.pledge && <PledgeReminder pledge={props.pledge} />}
-        <p className="empty">
-          Todavía no hay necesidades publicadas. Si atiendes un centro de acopio, publícalas
-          desde el rol correspondiente.
-        </p>
-        <div className="stack">{initiatives}</div>
-      </>
-    );
-  }
+
   return (
     <>
-      {props.pledge && <PledgeReminder pledge={props.pledge} />}
-      <div className="stack">{initiatives}</div>
-      <SearchBox value={query} onValue={setQuery} label="Buscar qué llevar o a qué centro" icon="package" />
-      <div className="chips scroll">
-        <button
-          type="button"
-          className={`chip${onlyUrgent ? " on" : ""}`}
-          aria-pressed={onlyUrgent}
-          onClick={() => setOnlyUrgent((current) => !current)}
-        >
-          <UiIcon name="alert" size={14} />
-          Solo urgentes
-        </button>
+      <div className="dc-subhead">
+        <input
+          className="dc-input sm"
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Buscar necesidad"
+          aria-label="Buscar qué llevar o a qué centro"
+        />
+        <div className="dc-chips">
+          <button type="button" aria-pressed={onlyUrgent} onClick={() => setOnlyUrgent((current) => !current)}>
+            Solo urgentes
+          </button>
+          <button type="button" aria-pressed={city === ""} onClick={() => setCity("")}>Todas</button>
+          {cities.map((name) => (
+            <button key={name} type="button" aria-pressed={city === name} onClick={() => setCity(name)}>{name}</button>
+          ))}
+        </div>
       </div>
-      <CityChips cities={cities} value={city} onValue={setCity} />
-      <p className="lead-text">Lo que ves lo pidieron los centros. Lo que ya está cubierto no aparece.</p>
-      {shown.length === 0 && <p className="empty">Nada coincide con lo que buscas. Prueba quitando algún filtro.</p>}
-      <div className="stack">
+
+      <div className="dc-body tight" style={{ padding: "14px 0 24px" }}>
+        {props.pledge && (
+          <div className="dc-live">
+            <i aria-hidden="true" />
+            <span>
+              Tienes {props.pledge.quantity} {props.pledge.unit} de {props.pledge.name} reservados
+              hasta las {new Date(props.pledge.expiresAt).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          </div>
+        )}
+
+        <button type="button" className="dc-tile compact" style={{ minHeight: 0 }} onClick={props.onInitiatives}>
+          <span><UiIcon name="reports" size={16} /></span>
+          <strong>Empresas que donan · kits, cuentas y cajeros</strong>
+        </button>
+
+        {props.needs.length === 0 && (
+          <p className="empty">Todavía no hay necesidades publicadas.</p>
+        )}
+        {props.needs.length > 0 && shown.length === 0 && (
+          <p className="empty">Nada coincide con lo que buscas. Prueba quitando algún filtro.</p>
+        )}
+
         {shown.map((need) => {
           const center = byId.get(need.centerId);
           if (!center) return null;
           const promised = need.covered + need.committed;
           const percent = Math.min(100, Math.round((promised / Math.max(1, need.target)) * 100));
+          const urgent = need.status === "urgent";
           return (
-            <button type="button" className="need-card" key={need.id} onClick={() => props.onPick(need)}>
-              <div className="need-top">
-                <strong>{need.name}</strong>
-                <span className={`pill ${need.status === "urgent" ? "urgent" : "soft"}`}>
-                  {need.status === "urgent" ? "Urgente" : "Se necesita"}
+            <button type="button" className="dc-card" key={need.id} onClick={() => props.onPick(need)} style={{ cursor: "pointer", gap: 9, textAlign: "left" }}>
+              <div className="dc-kv" style={{ alignItems: "flex-start", gap: 8, width: "100%" }}>
+                <span style={{ display: "grid", flex: 1, gap: 3, minWidth: 0 }}>
+                  <strong style={{ fontSize: "14px", lineHeight: 1.25 }}>{need.name}</strong>
+                  <span className="dc-sub">
+                    {center.name} · {center.city}
+                    {props.position ? ` · ${formatDistance(distanceKm(props.position, center))}` : ""}
+                  </span>
                 </span>
+                <span className={`dc-tag ${urgent ? "urgent" : "soft"}`}>{urgent ? "Urgente" : "Se necesita"}</span>
               </div>
-              <small>{center.name}</small>
-              <div
-                className="progress"
-                role="progressbar"
-                aria-label={`Avance de ${need.name}`}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={percent}
-              >
-                <i style={{ width: `${percent}%` }} />
-              </div>
-              <div className="progress-copy">
-                <span>{promised} de {need.target} {need.unit}</span>
-                {props.position && <span>{formatDistance(distanceKm(props.position, center))}</span>}
-              </div>
+              {/* La meta no siempre la puso el centro: cuando la estimamos nosotros hay
+                  que decirlo aquí, que es donde el donante decide cuánto llevar. */}
+              {need.detail && <span className="approx">{need.detail}</span>}
+              <span style={{ display: "grid", gap: 5, width: "100%" }}>
+                <span className="dc-bar" role="img" aria-label={`${percent}% cubierto`}>
+                  <i style={{ background: urgent ? "#dc2626" : "#2563eb", width: `${percent}%` }} />
+                </span>
+                <span className="dc-bar-copy">
+                  <span>{promised} de {need.target} {need.unit}</span>
+                  <span>faltan {remainingOf(need)}</span>
+                </span>
+              </span>
             </button>
           );
         })}
@@ -2140,42 +2149,57 @@ function PledgeScreen(props: {
   onQuantity: (value: number) => void;
 }) {
   const remaining = remainingOf(props.need);
+  const promised = props.need.covered + props.need.committed;
+  const percent = Math.min(100, Math.round((promised / Math.max(1, props.need.target)) * 100));
+  const urgent = props.need.status === "urgent";
   return (
-    <>
-      <section className="detail-card">
-        <h2>{props.need.name}</h2>
-        {props.need.detail && <p>{props.need.detail}</p>}
-        {props.center && (
-          <>
-            <span className="eyebrow">Entregar en</span>
-            <strong>{props.center.name}</strong>
-            <small>{props.center.address} · {props.center.city}</small>
-            {props.center.hours && <small>Horario: {props.center.hours}</small>}
-          </>
+    <div className="dc-body">
+      <section className="dc-card">
+        <div className="dc-kv" style={{ alignItems: "center" }}>
+          <strong className="dc-h lg">{props.need.name}</strong>
+          <span className={`dc-tag ${urgent ? "urgent" : "soft"}`}>{urgent ? "Urgente hoy" : "Se necesita"}</span>
+        </div>
+        <div className="dc-bar"><i style={{ background: urgent ? "#dc2626" : "#2563eb", width: `${percent}%` }} /></div>
+        <span style={{ color: "#64748b", fontSize: "11.5px", fontWeight: 600 }}>
+          {promised} de {props.need.target} {props.need.unit} · faltan {remaining}
+        </span>
+        {props.need.detail && (
+          <span className="approx" style={{ marginTop: 6 }}>{props.need.detail}</span>
         )}
       </section>
-      <section className="stepper-card">
-        <span>¿Cuánto puedes llevar?</span>
-        <div className="stepper">
-          <button type="button" aria-label="Reducir cantidad" onClick={() => props.onQuantity(Math.max(1, props.quantity - 1))}>
-            <UiIcon name="minus" size={20} />
-          </button>
-          <strong aria-live="polite">{props.quantity}</strong>
-          <button type="button" aria-label="Aumentar cantidad" onClick={() => props.onQuantity(Math.min(Math.max(1, remaining), props.quantity + 1))}>
-            <UiIcon name="plus" size={20} />
-          </button>
-        </div>
-        <small>{props.need.unit} · faltan {remaining}</small>
-      </section>
-      <p className="note">
-        Tu compromiso reserva el cupo por 6 horas. Si no llegas, se libera automáticamente para otro donante.
-      </p>
+
       {props.center && (
-        <a className="route" href={routeUrl(props.center)} target="_blank" rel="noreferrer">
-          Ver ruta <UiIcon name="external" size={15} />
-        </a>
+        <section className="dc-card">
+          <span className="dc-eyebrow">Entrega en</span>
+          <strong className="dc-h" style={{ fontSize: "13.5px", lineHeight: 1.3 }}>{props.center.name}</strong>
+          <span className="dc-sub" style={{ fontSize: "12px", lineHeight: 1.45 }}>
+            {props.center.address}, {props.center.city}
+            {props.center.hours ? <><br />{props.center.hours}</> : null}
+          </span>
+          <a className="dc-ghost" style={{ display: "block", textAlign: "center", textDecoration: "none" }}
+             href={routeUrl(props.center)} target="_blank" rel="noreferrer">Ver ruta en Maps</a>
+        </section>
       )}
-    </>
+
+      <section className="dc-card">
+        <div className="dc-kv" style={{ alignItems: "baseline" }}>
+          <strong className="dc-h" style={{ fontSize: "13px" }}>¿Cuánto vas a llevar?</strong>
+          <span style={{ color: "#94a3b8", fontSize: "11px", fontWeight: 500 }}>máx {remaining}</span>
+        </div>
+        <div className="dc-step">
+          <button type="button" aria-label="Reducir cantidad" onClick={() => props.onQuantity(Math.max(1, props.quantity - 1))}>−</button>
+          <span className="dc-step-val">
+            <strong style={{ fontSize: "30px", fontWeight: 700 }} aria-live="polite">{props.quantity}</strong>
+            <small>{props.need.unit}</small>
+          </span>
+          <button type="button" className="plus" aria-label="Aumentar cantidad" onClick={() => props.onQuantity(Math.min(Math.max(1, remaining), props.quantity + 1))}>+</button>
+        </div>
+      </section>
+
+      <p className="dc-note warn">
+        Tu compromiso reserva el cupo por 6 horas. Si no llegas, vuelve a quedar disponible para otra persona.
+      </p>
+    </div>
   );
 }
 
@@ -2193,23 +2217,44 @@ function DoneScreen({
   body,
   note,
   route,
-}: { kind: DoneKind; body: string; note: string; route: RouteHint | null }) {
+  onHome,
+}: { kind: DoneKind; body: string; note: string; route: RouteHint | null; onHome: () => void }) {
+  // El diseño separa referencia y hora límite en filas propias: son los dos datos
+  // que alguien vuelve a mirar después, y en un párrafo se pierden.
+  const reference = /[A-Z0-9]{6,}/.exec(note)?.[0] ?? "";
+  const deadline = /\d{1,2}:\d{2}( ?[ap]\.? ?m\.?)?/i.exec(note)?.[0] ?? "";
   return (
-    <section className="done">
-      <span className="mark ok" aria-hidden="true"><UiIcon name="check" size={30} /></span>
-      <h2>{DONE_TITLES[kind]}</h2>
-      <p>{body}</p>
-      {note && <p className="fineprint">{note}</p>}
-      {route && (
-        <section className="detail-card">
-          <span className="eyebrow">Dónde</span>
-          <strong>{route.name}</strong>
-          <small>{route.address}</small>
-          <a className="route" href={route.url} target="_blank" rel="noreferrer">
-            Abrir ruta <UiIcon name="external" size={15} />
-          </a>
-        </section>
+    <section className="dc-done">
+      <span className="tick" aria-hidden="true"><UiIcon name="check" size={28} /></span>
+      <div style={{ display: "grid", gap: 8 }}>
+        <h2>{DONE_TITLES[kind]}</h2>
+        <p>{body}</p>
+      </div>
+
+      {(reference || deadline) && (
+        <div className="dc-card">
+          {reference && (
+            <div className="dc-kv"><span>Referencia</span><strong>{reference}</strong></div>
+          )}
+          {reference && deadline && <div className="dc-hr" />}
+          {deadline && (
+            <div className="dc-kv"><span>Hora límite</span><strong className="warn">{deadline}</strong></div>
+          )}
+        </div>
       )}
+      {!reference && !deadline && note && <p className="dc-sub" style={{ margin: 0 }}>{note}</p>}
+
+      {route && (
+        <div className="dc-card" style={{ gap: 8 }}>
+          <span className="dc-eyebrow">Dónde</span>
+          <strong className="dc-h" style={{ fontSize: "13px", lineHeight: 1.25 }}>{route.name}</strong>
+          <span className="dc-sub">{route.address}</span>
+          <a className="dc-ghost" style={{ display: "block", textAlign: "center", textDecoration: "none" }}
+             href={route.url} target="_blank" rel="noreferrer">Abrir ruta</a>
+        </div>
+      )}
+
+      <button type="button" className="dc-linkbtn" onClick={onHome}>Volver al inicio</button>
     </section>
   );
 }

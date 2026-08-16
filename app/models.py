@@ -34,6 +34,10 @@ class Center(Base):
     verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     volunteers_saturated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # "exact" = pin verificado; "approximate" = solo tenemos la dirección, el punto es
+    # del barrio o de la calle. La app enruta por texto cuando es aproximado, para no
+    # mandar a nadie a una conjetura nuestra.
+    location_precision: Mapped[str] = mapped_column(String(12), nullable=False, default="exact")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
 

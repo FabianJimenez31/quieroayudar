@@ -30,6 +30,8 @@ class CenterCreate(BaseModel):
     hours: str = Field(default="", max_length=100)
     sourceName: str = Field(default="", max_length=120)
     sourceUrl: str = Field(default="", max_length=500)
+    # "approximate" cuando solo se tiene la dirección y el pin es del barrio o la calle.
+    locationPrecision: Literal["exact", "approximate"] = "exact"
 
     @field_validator("name", "city", "address", "contact", "hours", "sourceName", "sourceUrl")
     @classmethod

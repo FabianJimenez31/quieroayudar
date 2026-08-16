@@ -55,6 +55,9 @@ class Place:
     hours: str = ""
     # "no" cuando la fuente dice que ya tienen suficientes voluntarios.
     volunteers: str = ""
+    # "approximate" cuando solo tenemos la dirección: la app enruta por texto.
+    precision: str = "exact"
+    source_name: str = ""
     notes: list[str] = field(default_factory=list)
 
 
@@ -139,6 +142,8 @@ def read_csv(path: Path) -> list[Place]:
                 contact=pick("telefono", "contact", "phone"),
                 hours=pick("horario", "hours"),
                 volunteers=pick("voluntarios", "volunteers"),
+                precision=pick("precision", "precision_ubicacion") or "exact",
+                source_name=pick("fuente", "source", "source_name"),
             )
             latitude, longitude = pick("lat", "latitud", "latitude"), pick("lng", "lon", "longitud", "longitude")
             if latitude and longitude:
@@ -363,8 +368,10 @@ def main() -> int:
             "longitude": place.longitude,
             "contact": place.contact[:80],
             "hours": place.hours[:100],
-            "sourceName": args.source_name[:120],
+            # La fuente propia de cada fila manda; el argumento es el respaldo.
+            "sourceName": (place.source_name or args.source_name)[:120],
             "sourceUrl": args.source_url[:500],
+            "locationPrecision": "approximate" if place.precision == "approximate" else "exact",
         }
         try:
             status, body = request_json(f"{API}/centers", method="POST", payload=payload)

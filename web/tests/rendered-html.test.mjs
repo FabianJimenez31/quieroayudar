@@ -30,7 +30,7 @@ test("opens on the role picker, not on a marketing page", async () => {
   assert.match(html, /Puedo ofrecer manos/i);
   assert.match(html, /Quiero donar/i);
 
-  assert.match(html, /href="tel:123"/i);
+  assert.match(html, /Línea 123/);
   assert.match(html, /Saltar al contenido/i);
   assert.match(html, /<svg/i);
   assert.match(html, /manifest\.webmanifest/i);
@@ -89,8 +89,8 @@ test("every report screen is tap-only and ends in a confirmation", async () => {
   assert.match(code, />Urgente</);
   assert.match(code, />Se necesita</);
   assert.match(code, />Ya hay</);
-  assert.match(code, /¿Cuántas personas necesitas\?/);
-  assert.match(code, /Redirigir gente hacia/);
+  assert.match(code, /¿Cuántas personas\?/);
+  assert.match(code, /Solicitar manos|Falta apoyo/);
   assert.match(code, /DONE_TITLES/);
   // La meta se fija con stepper, nunca con teclado.
   assert.doesNotMatch(code, /type="number"/);
@@ -111,8 +111,8 @@ test("does not promise anything the app cannot do", async () => {
   // No existe endpoint de cancelación: el cupo solo se libera al vencer.
   assert.doesNotMatch(code, /cancela para liberar/i);
   assert.match(code, /se libera solo a las/);
-  // El reporte de personas deriva a la línea oficial.
-  assert.match(code, /Llamar al 123/);
+  // El reporte de personas deriva a la línea oficial en vez de prometer rescate.
+  assert.match(code, /tel:123/);
 });
 
 test("home shows the state of the network, not just four buttons", async () => {
@@ -121,21 +121,19 @@ test("home shows the state of the network, not just four buttons", async () => {
 
   // Las cuatro preguntas que el tablero responde de un vistazo.
   assert.match(html, /Ahora mismo/);
-  assert.match(html, /Se necesita ahora/);
-  assert.match(html, /Lo que ya se logró/);
-  assert.match(html, /Quién está trabajando/);
+  assert.match(html, /Qué falta/);
+  assert.match(html, /Cuánto se entregó/);
+  assert.match(html, /Quién trabaja/);
   assert.match(html, /Dónde faltan manos/);
   // Los roles siguen presentes: el tablero acompaña, no reemplaza.
   assert.match(html, /Estoy en una zona afectada/);
 });
 
-test("an empty dashboard offers the action that would fill it", async () => {
+test("an empty dashboard says so instead of showing zeros as if they were data", async () => {
   const response = await render();
   const html = await response.text();
-  // Sin datos, cada hueco propone qué hacer en vez de quedarse mudo.
-  assert.match(html, /Ningún centro ha publicado qué le falta/);
-  assert.match(html, /Atiendo un centro y quiero publicarlo/);
-  assert.match(html, /Puedo ir a echar una mano/);
+  assert.match(html, /Nada publicado/);
+  assert.match(html, /Sin metas aún/);
 });
 
 test("the tutorial is reachable and covers every role", async () => {
@@ -153,8 +151,8 @@ test("a centre can record what actually arrived", async () => {
   assert.match(code, /action: "needs-received"/);
   assert.match(code, /Registrar lo que llegó/);
   assert.match(code, /"recibido"/);
-  // Lo entregado y lo prometido no se mezclan: una promesa no es una caja.
-  assert.match(code, /entregados</);
+  // Lo entregado y lo prometido no se mezclan: una promesa no es una caja en el suelo.
+  assert.match(code, /prometidos/);
 });
 
 test("opening the app at the root always lands on home", async () => {
@@ -164,4 +162,19 @@ test("opening the app at the root always lands on home", async () => {
   assert.match(code, /\? linked : "roles"/);
   // Pero quien ya tenía rol conserva el atajo para retomarlo.
   assert.match(code, /Seguir como/);
+});
+
+test("the fake-news section is reachable and every claim carries its debunk", async () => {
+  const response = await render();
+  const html = await response.text();
+  assert.match(html, /Noticias falsas que están circulando/);
+
+  const hoaxes = await readFile(new URL("../app/hoaxes.ts", import.meta.url), "utf8");
+  const count = (pattern) => (hoaxes.match(pattern) ?? []).length;
+  const claims = count(/^ {4}claim:/gm);
+  assert.ok(claims > 0, "no hay bulos publicados");
+  // Publicar un bulo sin decir quién lo desmintió es publicar el bulo.
+  assert.equal(count(/^ {4}truth:/gm), claims);
+  assert.equal(count(/^ {4}source:/gm), claims);
+  assert.equal(count(/^ {4}url: "https:\/\//gm), claims);
 });

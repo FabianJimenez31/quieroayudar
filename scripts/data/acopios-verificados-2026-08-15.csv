@@ -1,0 +1,14 @@
+nombre,direccion,ciudad,lat,lng,precision,horario,fuente
+Plazoleta Jairo Varela,Av. 2 Nte. #10 Norte-1,Cali,3.45492,-76.53472,exact,,Alcaldía de Cali
+Escuela Nacional del Deporte,Calle 9 #34-01,Cali,3.42672,-76.53713,exact,,Alcaldía de Cali
+Banco de Alimentos de Cali,Calle 24 #6-103,Cali,3.45467,-76.52033,approximate,,Banco de Alimentos de Cali
+CAFE Consota,"Barrio Villa Consota, Cuba",Pereira,4.80194,-75.72575,approximate,,Alcaldía de Pereira
+CAFE Perla del Otún,"Diagonal a la iglesia de los 2.500 Lotes, Cuba",Pereira,4.80205,-75.73935,approximate,,Alcaldía de Pereira
+CAFE El Remanso,"Avenida principal del barrio El Remanso, junto al Centro de Salud",Pereira,4.78676,-75.67055,approximate,,Alcaldía de Pereira
+CAFE Kennedy,Parque principal del barrio Kennedy,Pereira,4.80898,-75.67262,approximate,,Alcaldía de Pereira
+CAFE Ormaza,"Calle 3 bis #5-38, Avenida del Río",Pereira,4.81194,-75.68093,approximate,,Alcaldía de Pereira
+CAFE San Nicolás,Carrera 14 bis #28-38,Pereira,4.80768,-75.68780,approximate,,Alcaldía de Pereira
+CAFE Comuna del Café,"Carrera 3 con Calle 59A, Parque Industrial",Pereira,4.82422,-75.72799,approximate,,Alcaldía de Pereira
+Banco de Alimentos de Dosquebradas,"Transversal 5 #6-30, La Badea",Dosquebradas,4.82739,-75.69900,approximate,,Gobernación de Risaralda
+Fundación Innovación Social Paz y Desarrollo,"Calle 27 #9-12, barrio El Silencio",Quibdó,5.69074,-76.65641,approximate,,Fundación Innovación Social Paz y Desarrollo
+Reddhhpac Red de Derechos Humanos del Pacífico,"Calle 25 #6-58, barrio Pandeyuca",Quibdó,5.68918,-76.65921,approximate,,Red de Derechos Humanos del Pacífico

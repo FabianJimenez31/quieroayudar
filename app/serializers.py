@@ -23,6 +23,7 @@ def center_json(row: Center) -> dict:
         "verifiedAt": iso(row.verified_at) if row.verified_at else None,
         "status": row.status,
         "volunteersSaturated": bool(row.volunteers_saturated),
+        "locationPrecision": row.location_precision or "exact",
         "createdAt": iso(row.created_at),
         "updatedAt": iso(row.updated_at),
     }

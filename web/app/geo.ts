@@ -18,7 +18,19 @@ export function formatDistance(value: number) {
 }
 
 export function routeUrl(center: Center) {
+  // Con el pin aproximado la ruta se abre con la dirección escrita: Google la resuelve
+  // mucho mejor que nuestra conjetura. Enrutar por unas coordenadas de barrio dejaba a
+  // la gente a cientos de metros del sitio, y en una emergencia eso es tiempo perdido.
+  if (center.locationPrecision === "approximate") {
+    const target = encodeURIComponent(`${center.address}, ${center.city}, Colombia`);
+    return `https://www.google.com/maps/dir/?api=1&destination=${target}`;
+  }
   return `https://www.google.com/maps/dir/?api=1&destination=${center.latitude},${center.longitude}`;
+}
+
+/** El pin no es fiable: la tarjeta debe decirlo antes de que alguien se desplace. */
+export function isApproximate(center: Center) {
+  return center.locationPrecision === "approximate";
 }
 
 /** Un punto sin coordenadas no se puede pintar: el mapa lo dejaría en el golfo de Guinea. */
